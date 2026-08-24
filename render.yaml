@@ -1,12 +1,11 @@
 services:
   - type: web
-    name: voice-orb-neto
-    env: node
+    name: neto
+    runtime: node
     buildCommand: npm install && npm run build
     startCommand: npm start
-    healthCheckPath: /api/health
     envVars:
-      - key: NODE_ENV
-        value: production
-      - key: FIREBASE_SERVICE_ACCOUNT_KEY
+      - key: GEMINI_API_KEY
         sync: false
+      - key: GEMINI_TEXT_MODEL
+        value: gemini-2.5-flash
