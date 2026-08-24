@@ -2,8 +2,8 @@
   "name": "Voice Orb",
   "short_name": "Voice Orb",
   "description": "A voice-first AI assistant created by Macdonald Barasa.",
-  "start_url": "/",
-  "scope": "/",
+  "start_url": ".",
+  "scope": ".",
   "display": "standalone",
   "display_override": [
     "window-controls-overlay",

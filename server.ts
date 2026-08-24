@@ -39,7 +39,7 @@ if (serviceAccountKey) {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT || 3000);
 
   app.use(cors());
   app.use(express.json());
@@ -67,6 +67,42 @@ async function startServer() {
     }
   });
 
+  // --- Capacity protection / request scheduling ---
+  // Keep each Render instance bounded so bursts do not create thousands of
+  // simultaneous Gemini calls. Render can scale instances horizontally.
+  const MAX_CHAT_CONCURRENCY = Number(process.env.MAX_CHAT_CONCURRENCY || 24);
+  const MAX_CHAT_QUEUE = Number(process.env.MAX_CHAT_QUEUE || 120);
+  const MAX_LIVE_CONNECTIONS = Number(process.env.MAX_LIVE_CONNECTIONS || 80);
+  const chatQueue: Array<{ run: () => Promise<void>; reject: (error: Error) => void }> = [];
+  let activeChats = 0;
+  let activeLiveConnections = 0;
+
+  const pumpChatQueue = () => {
+    while (activeChats < MAX_CHAT_CONCURRENCY && chatQueue.length) {
+      const job = chatQueue.shift()!;
+      activeChats += 1;
+      void job.run().catch(job.reject).finally(() => {
+        activeChats -= 1;
+        pumpChatQueue();
+      });
+    }
+  };
+
+  const enqueueChat = <T>(run: () => Promise<T>) => new Promise<T>((resolve, reject) => {
+    if (chatQueue.length >= MAX_CHAT_QUEUE) {
+      reject(Object.assign(new Error('Neto is handling many conversations right now. Please try again in a moment.'), { code: 'QUEUE_FULL' }));
+      return;
+    }
+    chatQueue.push({
+      run: async () => { try { resolve(await run()); } catch (error) { reject(error); } },
+      reject,
+    });
+    pumpChatQueue();
+  });
+
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  const isRateLimitError = (error: any) => error?.status === 429 || /429|rate.?limit|resource.?exhausted/i.test(String(error?.message || ''));
+
   // --- WebSocket Server for Live API ---
   const { WebSocketServer } = await import("ws");
   const httpServer = app.listen(PORT, "0.0.0.0", () => {
@@ -76,6 +112,12 @@ async function startServer() {
   const wss = new WebSocketServer({ server: httpServer, path: "/live" });
 
   wss.on("connection", async (clientWs, req) => {
+    if (activeLiveConnections >= MAX_LIVE_CONNECTIONS) {
+      clientWs.send(JSON.stringify({ error: "VOICE_CAPACITY", outputTranscription: "Neto is handling many voice conversations right now. Please try again in a moment.", turnComplete: true }));
+      clientWs.close(1013, "voice capacity");
+      return;
+    }
+    activeLiveConnections += 1;
     try {
       if (!ai) {
         clientWs.send(JSON.stringify({ error: "Gemini API is not configured" }));
@@ -122,9 +164,11 @@ async function startServer() {
       });
       
       clientWs.on("close", () => {
-        // cleanup session if possible
+        activeLiveConnections = Math.max(0, activeLiveConnections - 1);
+        try { session.close?.(); } catch {}
       });
     } catch (e: any) {
+      activeLiveConnections = Math.max(0, activeLiveConnections - 1);
       console.error("Failed to connect to Live API", e);
       try {
         const isRateLimit = e?.status === 429 || (e?.message && e.message.includes("429"));
@@ -140,73 +184,68 @@ async function startServer() {
     }
   });
 
-  // Chat API stream route integrating Gemini & Firestore
+  // --- Chat API with bounded concurrency, retries and streaming ---
   app.post("/api/chat-stream", async (req, res) => {
+    const { message, history = [], sessionId = "default-session", clientContext = {} } = req.body || {};
+    const cleanMessage = typeof message === "string" ? message.trim().slice(0, 12000) : "";
+    if (!cleanMessage) return res.status(400).json({ error: "Message is required." });
+    if (!ai) return res.status(503).json({ error: "Gemini API is not configured" });
+
+    let disconnected = false;
+    req.on("close", () => { disconnected = true; });
+
     try {
-      if (!ai) {
-        return res.status(503).json({ error: "Gemini API is not configured" });
-      }
+      await enqueueChat(async () => {
+        let lastError: any = null;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          if (disconnected) return;
+          try {
+            const contents = [...(Array.isArray(history) ? history.slice(-20) : []), { role: "user", parts: [{ text: cleanMessage }] }];
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.setHeader("Cache-Control", "no-cache, no-transform");
+            res.setHeader("X-Neto-Queue", "bounded");
 
-      const { message, history = [], sessionId = "default-session", clientContext = {} } = req.body;
-      
-      const contents = [...history, { role: "user", parts: [{ text: message }] }];
+            const responseStream = await ai!.models.generateContentStream({
+              model: process.env.GEMINI_TEXT_MODEL || "gemini-3.5-flash-lite",
+              contents,
+              config: {
+                systemInstruction: `You are Neto, the AI assistant inside Voice Orb. Be fast, natural and concise by default. Normally answer in 1-2 short sentences unless the user asks for detail. Avoid markdown in voice replies. Your name is Neto. Voice Orb was created by Macdonald Barasa. Do not invent biography or personal details about the creator. If asked about installation, explain that Voice Orb is a PWA and only claim installation when the client says it is installed. Client context: ${JSON.stringify(clientContext).slice(0, 4000)}`,
+              },
+            });
 
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.setHeader('Transfer-Encoding', 'chunked');
+            let fullText = "";
+            for await (const chunk of responseStream) {
+              if (disconnected) break;
+              if (chunk.text) { fullText += chunk.text; res.write(chunk.text); }
+            }
+            if (!disconnected && !res.writableEnded) res.end();
 
-      const responseStream = await ai.models.generateContentStream({
-        model: "gemini-1.5-flash",
-        contents,
-        config: {
-          systemInstruction: `You are Neto, the AI assistant inside the Voice Orb app. Give brief, immediate conversational replies, normally 1-2 short sentences unless the user asks for detail. Never use markdown in voice replies. Be natural, friendly, and fast.
-
-Verified AI identity: Your name is Neto. You are the AI assistant inside the Voice Orb app. The app was created by Macdonald Barasa. If the user asks your name, who you are, or what they should call you, answer that your name is Neto. Do not call yourself Voice Orb; Voice Orb is the application name. Do not say your name is Gemini unless the user specifically asks which underlying AI technology powers you.
-Do not invent additional biography, location, occupation, contact details, social links, or achievements for Macdonald Barasa. If asked who created the app, say it was created by Macdonald Barasa.
-
-Installation awareness: the client sends an installed flag. If installed is false and the user asks how to install Voice Orb, or asks whether it is installed, explain that it is a PWA and can be installed when the browser offers installation. If installed is false and the user explicitly asks about installing it, tell them to use the app's Install button or their browser's Add to Home Screen/Install option. Do not falsely claim that installation succeeded. Client context: ${JSON.stringify(clientContext)}`,
+            if (getApps().length && fullText) {
+              try {
+                const db = getFirestore();
+                const batch = db.batch();
+                const sessionRef = db.collection("conversations").doc(sessionId);
+                batch.set(sessionRef.collection("messages").doc(), { role: "user", text: cleanMessage, timestamp: FieldValue.serverTimestamp() });
+                batch.set(sessionRef.collection("messages").doc(), { role: "model", text: fullText, timestamp: FieldValue.serverTimestamp() });
+                await batch.commit();
+              } catch (dbError) { console.error("Failed to save conversation:", dbError); }
+            }
+            return;
+          } catch (error: any) {
+            lastError = error;
+            if (!isRateLimitError(error) || attempt === 2) break;
+            await sleep(250 * (2 ** attempt) + Math.floor(Math.random() * 150));
+          }
         }
+
+        const rateLimited = isRateLimitError(lastError);
+        const errorMsg = rateLimited ? "Neto is busy right now. Your request was protected from overload; please try again shortly." : "Neto could not complete that request. Please try again.";
+        if (!disconnected && !res.headersSent) res.status(rateLimited ? 429 : 500).json({ error: errorMsg });
+        else if (!disconnected && !res.writableEnded) { res.write(errorMsg); res.end(); }
       });
-
-      let fullText = "";
-      for await (const chunk of responseStream) {
-        if (chunk.text) {
-          fullText += chunk.text;
-          res.write(chunk.text);
-        }
-      }
-      res.end();
-
-      // Attempt to save to Firestore
-      if (getApps().length) {
-        try {
-          const db = getFirestore();
-          const sessionRef = db.collection("conversations").doc(sessionId);
-          await sessionRef.collection("messages").add({
-            role: "user",
-            text: message,
-            timestamp: FieldValue.serverTimestamp()
-          });
-          await sessionRef.collection("messages").add({
-            role: "model",
-            text: fullText,
-            timestamp: FieldValue.serverTimestamp()
-          });
-        } catch (dbError) {
-          console.error("Failed to save to Firestore:", dbError);
-        }
-      }
     } catch (error: any) {
-      console.error("Error in /api/chat-stream:", error);
-      const isRateLimit = error?.status === 429 || (error?.message && error.message.includes("429"));
-      const errorMsg = isRateLimit
-        ? "Sorry, you have reached the limit. Please try again later."
-        : "Sorry, my systems are currently overloaded. Please try again in a moment.";
-      if (!res.headersSent) {
-        res.status(isRateLimit ? 429 : 500).json({ error: errorMsg, details: error.message });
-      } else {
-        res.write(errorMsg);
-        res.end();
-      }
+      if (error?.code === "QUEUE_FULL") return res.status(429).json({ error: error.message, retryAfterMs: 1500 });
+      if (!res.headersSent) return res.status(500).json({ error: "Neto is temporarily unavailable. Please try again." });
     }
   });
 

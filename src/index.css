@@ -84,3 +84,15 @@ button, input { font: inherit; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
+
+
+.orb-reactive { isolation: isolate; }
+.orb-sparkles { position: absolute; inset: -26%; z-index: 3; pointer-events: none; opacity: .48; transition: opacity .5s ease, transform .5s ease; transform: scale(calc(1 + var(--spark-strength) * .035)); }
+.orb-sparkles.is-active { opacity: .92; }
+.orb-sparkle { position: absolute; display: block; border-radius: 999px; background: radial-gradient(circle at 35% 35%, #fff 0 18%, rgba(255,255,255,.9) 25%, rgba(120,160,255,.72) 52%, transparent 75%); box-shadow: 0 0 7px rgba(255,255,255,.9), 0 0 18px rgba(120,160,255,.55); animation: orbSparkleFloat ease-in-out infinite; opacity: calc(.22 + var(--spark-strength) * .78); }
+.status-listening .orb-sparkle { background: radial-gradient(circle, #fff 0 18%, rgba(120,180,255,.95) 38%, rgba(92,120,255,.5) 58%, transparent 78%); }
+.status-thinking .orb-sparkle { background: radial-gradient(circle, #fff 0 16%, rgba(181,120,255,.95) 38%, rgba(124,92,255,.5) 58%, transparent 78%); }
+.status-speaking .orb-sparkle { background: radial-gradient(circle, #fff 0 18%, rgba(90,230,190,.95) 38%, rgba(16,163,127,.5) 58%, transparent 78%); }
+.orb-caption { position: absolute; z-index: 8; left: 50%; bottom: -74px; transform: translateX(-50%); width: min(86vw, 520px); padding: 10px 15px; border: 1px solid var(--border); border-radius: 18px; background: color-mix(in srgb, var(--surface-solid) 88%, transparent); backdrop-filter: blur(18px); box-shadow: 0 12px 35px rgba(0,0,0,.08); font-size: 13px; line-height: 19px; text-align: center; color: var(--text); }
+@keyframes orbSparkleFloat { 0%,100% { transform: translate3d(0, 5px, 0) scale(.55) rotate(0deg); opacity: .16; } 18% { opacity: .85; } 50% { transform: translate3d(var(--spark-drift), -9px, 0) scale(1.12) rotate(45deg); opacity: 1; } 82% { opacity: .5; } }
+@media (max-width: 520px) { .orb-sparkles { inset: -18%; } .orb-caption { bottom: -82px; width: 84vw; } }
