@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: react-firebase-backend
+    env: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: FIREBASE_SERVICE_ACCOUNT_KEY
+        sync: false
