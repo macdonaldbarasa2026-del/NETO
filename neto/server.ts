@@ -42,36 +42,7 @@ async function startServer() {
   const PORT = 3000;
 
   app.use(cors());
-  app.use(express.json({ limit: "14mb" }));
-  app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
-    if (err?.type === "entity.too.large") return res.status(413).json({ error: "Upload is too large. Maximum upload size is 10 MB." });
-    next(err);
-  });
-
-  // Protect the single backend from accidental request floods. Requests over the
-  // limit receive a clean response instead of tying up the AI connection.
-  const requestWindows = new Map<string, { started: number; count: number }>();
-  const MAX_REQUESTS_PER_MINUTE = 12;
-  const MAX_CONCURRENT_AI = 3;
-  let activeAiRequests = 0;
-  const aiGuard = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const key = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown").split(",")[0].trim();
-    const now = Date.now();
-    const current = requestWindows.get(key);
-    for (const [ip, window] of requestWindows) if (now - window.started >= 120000) requestWindows.delete(ip);
-    if (!current || now - current.started >= 60000) requestWindows.set(key, { started: now, count: 1 });
-    else {
-      current.count += 1;
-      if (current.count > MAX_REQUESTS_PER_MINUTE) return res.status(429).json({ error: "Too many requests. Please wait a moment and try again." });
-    }
-    if (activeAiRequests >= MAX_CONCURRENT_AI) return res.status(429).json({ error: "Neto is busy right now. Please try again in a moment." });
-    activeAiRequests += 1;
-    let released = false;
-    const release = () => { if (!released) { released = true; activeAiRequests = Math.max(0, activeAiRequests - 1); } };
-    res.on("finish", release);
-    res.on("close", release);
-    next();
-  };
+  app.use(express.json({ limit: "2mb" }));
 
   // --- API Routes ---
   app.get("/api/health", (req, res) => {
@@ -170,32 +141,45 @@ async function startServer() {
   });
 
   // Chat API stream route integrating Gemini & Firestore
-  app.post("/api/chat-stream", aiGuard, async (req, res) => {
+  app.post("/api/chat-stream", async (req, res) => {
     try {
-      if (!ai) {
-        return res.status(503).json({ error: "Gemini API is not configured" });
+      if (!ai) return res.status(503).json({ error: "Gemini API is not configured" });
+
+      const { message, history = [], sessionId = "default-session", clientContext = {}, attachment = null } = req.body;
+      const safeHistory = Array.isArray(history) ? history.slice(-20) : [];
+      const userParts: any[] = [{ text: message || (attachment?.mimeType?.startsWith("image/") ? "Please analyze the attached image." : "Please analyze the attached file.") }];
+
+      if (attachment?.text) {
+        userParts.push({ text: `Attached file ${attachment.name || "file"} contains:\n${String(attachment.text).slice(0, 12000)}` });
       }
 
-      const { message = "", history = [], sessionId = "default-session", clientContext = {}, attachment = null } = req.body;
-      
-      const safeMessage = String(message).slice(0, 20000);
-      const safeHistory = Array.isArray(history) ? history.slice(-20) : [];
-      const userParts: any[] = [{ text: safeMessage || "Please analyze the attached file." }];
-      if (attachment?.mimeType) {
-        const size = Number(attachment.size || 0);
-        if (size > 10 * 1024 * 1024) return res.status(413).json({ error: "File too large. Maximum upload size is 10 MB." });
-        if (attachment.textContent) {
-          userParts.push({ text: `Attached file: ${String(attachment.name || "file")}\n\n${String(attachment.textContent).slice(0, 100000)}` });
-        } else if (/^(image|audio)\//.test(attachment.mimeType) || attachment.mimeType === "application/pdf") {
-          userParts.push({ inlineData: { mimeType: attachment.mimeType, data: attachment.data } });
-        } else {
-          return res.status(415).json({ error: "This file type is not supported. Use an image, PDF, audio, or text file." });
+      if (attachment?.url && attachment?.mimeType) {
+        const allowedHosts = new Set(["firebasestorage.googleapis.com", "storage.googleapis.com"]);
+        const parsedUrl = new URL(attachment.url);
+        if (!allowedHosts.has(parsedUrl.hostname)) {
+          return res.status(400).json({ error: "Attachment URL is not a supported Firebase Storage URL." });
+        }
+        if (Number(attachment.size || 0) > 10 * 1024 * 1024) {
+          return res.status(413).json({ error: "Files must be 10 MB or smaller." });
+        }
+
+        const fileResponse = await fetch(attachment.url);
+        if (!fileResponse.ok) throw new Error("Could not read the uploaded Firebase file.");
+        const buffer = Buffer.from(await fileResponse.arrayBuffer());
+        if (buffer.length > 10 * 1024 * 1024) return res.status(413).json({ error: "Uploaded file is too large." });
+
+        const mimeType = String(attachment.mimeType).split(";")[0].toLowerCase();
+        const supportedInline = /^(image\/(png|jpeg|jpg|webp|gif)|application\/pdf)$/.test(mimeType);
+        if (supportedInline) {
+          userParts.push({ inlineData: { mimeType: mimeType === "image/jpg" ? "image/jpeg" : mimeType, data: buffer.toString("base64") } });
+        } else if (!attachment.text) {
+          userParts.push({ text: `The file ${attachment.name || "attachment"} was uploaded to Firebase Storage. Its MIME type is ${mimeType}. The app could not extract readable text from this file on the client.` });
         }
       }
-      const contents = [...safeHistory, { role: "user", parts: userParts }];
 
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.setHeader('Transfer-Encoding', 'chunked');
+      const contents = [...safeHistory, { role: "user", parts: userParts }];
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.setHeader("Transfer-Encoding", "chunked");
 
       const responseStream = await ai.models.generateContentStream({
         model: "gemini-1.5-flash",
@@ -210,8 +194,7 @@ Identity rules:
 - Gemini is only the underlying AI technology used by the application when relevant; it is not your name or creator.
 - If asked who created you or the app, answer: "I was created for Neto by Macdonald Barasa."
 - Do not invent biography, location, contact details, social links, achievements, ownership, or company history for Macdonald Barasa.
-- Be honest about capabilities. You can analyze text and, when an image is attached, inspect the image and explain what you can see.
-- When an image/screenshot is attached, use its visual information to answer the user's question. Do not pretend you saw an image if none was provided.
+- Be honest about capabilities. You can analyze text, images, and supported PDF attachments supplied by the app.
 Conversation rules:
 - Answer text messages normally and directly. Never require voice input for a text question.
 - Keep replies concise by default, but give detail when requested.
@@ -221,7 +204,7 @@ Installation awareness:
 - If installed is false and the user asks to install, explain that the app's Install button or browser Add to Home Screen/Install option should be used.
 - Never falsely claim installation succeeded.
 Client context: ${JSON.stringify(clientContext)}`,
-        }
+        },
       });
 
       let fullText = "";
@@ -233,37 +216,23 @@ Client context: ${JSON.stringify(clientContext)}`,
       }
       res.end();
 
-      // Attempt to save to Firestore
       if (getApps().length) {
         try {
           const db = getFirestore();
-          const sessionRef = db.collection("conversations").doc(sessionId);
-          await sessionRef.collection("messages").add({
-            role: "user",
-            text: message,
-            timestamp: FieldValue.serverTimestamp()
-          });
-          await sessionRef.collection("messages").add({
-            role: "model",
-            text: fullText,
-            timestamp: FieldValue.serverTimestamp()
-          });
+          const sessionRef = db.collection("conversations").doc(String(sessionId).slice(0, 100));
+          const attachmentMeta = attachment ? { name: attachment.name, mimeType: attachment.mimeType, storagePath: attachment.storagePath, size: attachment.size } : null;
+          await sessionRef.collection("messages").add({ role: "user", text: message, attachment: attachmentMeta, timestamp: FieldValue.serverTimestamp() });
+          await sessionRef.collection("messages").add({ role: "model", text: fullText, timestamp: FieldValue.serverTimestamp() });
         } catch (dbError) {
           console.error("Failed to save to Firestore:", dbError);
         }
       }
     } catch (error: any) {
       console.error("Error in /api/chat-stream:", error);
-      const isRateLimit = error?.status === 429 || (error?.message && error.message.includes("429"));
-      const errorMsg = isRateLimit
-        ? "Sorry, you have reached the limit. Please try again later."
-        : "Sorry, my systems are currently overloaded. Please try again in a moment.";
-      if (!res.headersSent) {
-        res.status(isRateLimit ? 429 : 500).json({ error: errorMsg });
-      } else {
-        res.write(errorMsg);
-        res.end();
-      }
+      const isRateLimit = error?.status === 429 || String(error?.message || "").includes("429");
+      const errorMsg = isRateLimit ? "Sorry, you have reached the limit. Please try again later." : "Sorry, my systems are currently overloaded. Please try again in a moment.";
+      if (!res.headersSent) res.status(isRateLimit ? 429 : 500).json({ error: errorMsg });
+      else { res.write(errorMsg); res.end(); }
     }
   });
 
