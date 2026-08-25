@@ -67,6 +67,7 @@ export default function App() {
   const [captionsEnabled, setCaptionsEnabled] = useState(false);
   const [endConfirmOpen, setEndConfirmOpen] = useState(false);
   const [orbEnergy, setOrbEnergy] = useState(0.12);
+  const [manualInstallInfo, setManualInstallInfo] = useState<{ platform: string; steps: string[] } | null>(null);
 
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const recognitionRef = useRef<any>(null);
@@ -85,6 +86,8 @@ export default function App() {
   const micLevelRafRef = useRef<number | null>(null);
   const playbackContextRef = useRef<AudioContext | null>(null);
   const playbackTimeRef = useRef(0);
+  const keepListeningRef = useRef(false);
+  const intentionalStopRef = useRef(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -101,6 +104,21 @@ export default function App() {
   useEffect(() => {
     const standalone = window.matchMedia?.("(display-mode: standalone)").matches || (window.navigator as any).standalone === true;
     setIsInstalled(standalone);
+    // Chromium browsers (Chrome/Edge/Samsung Internet/Opera, on phone or laptop) fire
+    // "beforeinstallprompt" below and get the automatic Install/Cancel popup.
+    // Safari (iPhone AND Mac) and Firefox never fire that event — Apple and Mozilla don't
+    // implement it, so no code can produce an automatic popup there. We detect those
+    // platforms ourselves and show the correct manual steps instead.
+    const ua = navigator.userAgent;
+    const isIOS = /iPad|iPhone|iPod/.test(ua) && !(window as any).MSStream;
+    const isSafari = /^((?!chrome|android|crios|fxios|edg\/).)*safari/i.test(ua);
+    const isFirefox = /firefox|fxios/i.test(ua);
+    let manual: { platform: string; steps: string[] } | null = null;
+    if (isIOS && isSafari) manual = { platform: "iPhone / iPad (Safari)", steps: ["Tap the Share icon in Safari's toolbar", 'Scroll down and tap "Add to Home Screen"', 'Tap "Add" to confirm'] };
+    else if (!isIOS && isSafari) manual = { platform: "Mac (Safari)", steps: ["Click the Share icon in Safari's toolbar", 'Choose "Add to Dock"', 'Click "Add" to confirm'] };
+    else if (isFirefox) manual = { platform: "Firefox", steps: ["Open the Firefox menu", 'Look for "Install" or "Add to Home screen" (only on Firefox versions that support it)'] };
+    setManualInstallInfo(!standalone ? manual : null);
+    if (manual && !standalone && !installDismissed) setInstallOpen(true);
     const onBeforeInstall = (event: Event) => {
       event.preventDefault();
       setInstallPrompt(event);
@@ -174,6 +192,7 @@ export default function App() {
 
   const startLiveVoice = useCallback(async () => {
     if (isMicMuted || !voiceMode) return;
+    keepListeningRef.current = true;
     try {
       const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const wsUrl = `${wsProtocol}//${window.location.host}/live`;
@@ -191,7 +210,18 @@ export default function App() {
       };
       
       ws.onerror = (e: any) => { console.error("Live API error", e); setTranscript("Voice connection error. Text chat is still available."); disconnectLive(); setStatus("idle"); };
-      ws.onclose = () => { setLiveConnected(false); isListeningRef.current = false; setStatus("idle"); };
+      ws.onclose = () => {
+        setLiveConnected(false); isListeningRef.current = false;
+        // Keep the mic "awake" until the user mutes: if this close wasn't requested by the user
+        // (e.g. the Live session timed out or the server dropped it), reconnect automatically.
+        if (!intentionalStopRef.current && keepListeningRef.current && !isMicMuted && voiceMode) {
+          setStatus("thinking");
+          setTimeout(() => { if (keepListeningRef.current && !isMicMuted && voiceMode) void startLiveVoice(); }, 400);
+        } else {
+          setStatus("idle");
+        }
+        intentionalStopRef.current = false;
+      };
       
       liveSessionRef.current = ws;
       
@@ -272,7 +302,11 @@ export default function App() {
         method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
         body: JSON.stringify({ message: text, history: chatHistory, image: attachment ? { mimeType: attachment.mimeType, data: attachment.data, name: attachment.name } : null, clientContext }),
       });
-      if (!response.ok) throw new Error("Network error");
+      if (!response.ok) {
+        let serverMessage = "";
+        try { const body = await response.json(); serverMessage = body?.error || ""; } catch {}
+        throw new Error(serverMessage || `Request failed (${response.status})`);
+      }
       const reader = response.body?.getReader(); const decoder = new TextDecoder();
       let buffer = "", fullResponse = "", spoken = false;
       if (reader) {
@@ -294,7 +328,9 @@ export default function App() {
     } catch (error: any) {
       if (error?.name !== "AbortError") {
         setStatus("idle");
-        if (!isMuted) await speakSentence("Sorry, I couldn't reach the AI service.");
+        const spokenError = error?.message || "Sorry, I couldn't reach the AI service.";
+        setTranscript(spokenError);
+        if (!isMuted) await speakSentence(spokenError);
       }
     } finally { requestAbortRef.current = null; }
   }, [chatHistory, isInstalled, installPrompt, isMuted, theme, stopEverything, speakSentence]);
@@ -306,8 +342,12 @@ export default function App() {
     if (!SpeechRecognition) { setTranscript("Voice input is not supported in this browser."); setStatus("idle"); return; }
     try { await navigator.mediaDevices?.getUserMedia({ audio: true }); } catch { setIsMicMuted(true); setTranscript("Microphone permission is required."); setStatus("idle"); return; }
     try { recognitionRef.current?.abort(); } catch {}
+    intentionalStopRef.current = false;
+    keepListeningRef.current = true;
     const recognition = new SpeechRecognition(); recognitionRef.current = recognition;
-    recognition.continuous = false; recognition.interimResults = true; recognition.maxAlternatives = 1; recognition.lang = "en-US";
+    // continuous:true + auto-restart below keeps the mic "awake" through natural pauses,
+    // instead of the browser closing the session after the first thing the user says.
+    recognition.continuous = true; recognition.interimResults = true; recognition.maxAlternatives = 1; recognition.lang = "en-US";
     isListeningRef.current = true; transcriptRef.current = ""; setTranscript(""); setStatus("listening"); startAmbient();
     recognition.onstart = () => { isListeningRef.current = true; setStatus("listening"); };
     recognition.onresult = (event: any) => {
@@ -316,13 +356,26 @@ export default function App() {
       transcriptRef.current = text.trim(); setTranscript(text.trim());
     };
     recognition.onerror = (event: any) => {
-      isListeningRef.current = false; stopAmbient(); setStatus("idle");
-      if (["not-allowed", "service-not-allowed"].includes(event.error)) { setIsMicMuted(true); setTranscript("Microphone access was denied."); }
+      isListeningRef.current = false; stopAmbient();
+      if (["not-allowed", "service-not-allowed"].includes(event.error)) {
+        intentionalStopRef.current = true; keepListeningRef.current = false;
+        setIsMicMuted(true); setTranscript("Microphone access was denied."); setStatus("idle");
+      }
+      // Other errors (e.g. "no-speech", "network", "aborted") are handled by onend, which
+      // decides whether to auto-restart — the browser fires onend right after onerror.
     };
     recognition.onend = () => {
       isListeningRef.current = false; stopAmbient();
       const text = transcriptRef.current.trim(); transcriptRef.current = "";
-      if (text) { setTranscript(""); void handleMessage(text); } else setStatus("idle");
+      if (text) {
+        setTranscript(""); void handleMessage(text);
+      } else if (keepListeningRef.current && !intentionalStopRef.current && !isMicMuted) {
+        // The browser ended the session on its own (silence timeout) — restart so the
+        // orb stays listening until the user actually mutes it.
+        try { recognition.start(); } catch { setStatus("idle"); }
+      } else {
+        setStatus("idle");
+      }
     };
     try { recognition.start(); } catch { setStatus("idle"); }
   }, [handleMessage, isMicMuted, startAmbient, stopAmbient, startLiveVoice, voiceMode]);
@@ -330,14 +383,14 @@ export default function App() {
   const handleOrbTap = useCallback(() => {
     if (status === "listening" || isListeningRef.current) {
       const text = transcriptRef.current.trim(); stopEverything(); if (text) void handleMessage(text); setTranscript(""); transcriptRef.current = "";
-    } else if (status === "speaking" || status === "thinking") stopEverything();
+    } else if (status === "speaking" || status === "thinking") { intentionalStopRef.current = true; keepListeningRef.current = false; stopEverything(); }
     else void startListening();
   }, [status, stopEverything, handleMessage, startListening]);
 
   const toggleMic = useCallback(() => {
     setIsMicMuted(prev => {
       const next = !prev;
-      if (next) { try { recognitionRef.current?.abort(); } catch {}  disconnectLive(); isListeningRef.current = false; stopAmbient(); if (status === "listening") setStatus("idle"); }
+      if (next) { intentionalStopRef.current = true; keepListeningRef.current = false; try { recognitionRef.current?.abort(); } catch {}  disconnectLive(); isListeningRef.current = false; stopAmbient(); if (status === "listening") setStatus("idle"); }
       return next;
     });
   }, [disconnectLive, status, stopAmbient]);
@@ -384,10 +437,10 @@ export default function App() {
         </div>
       </div>
 
-      {!isInstalled && installPrompt && !installDismissed && (
+      {!isInstalled && (installPrompt || manualInstallInfo) && !installDismissed && (
         <div className="absolute top-[84px] left-4 right-4 z-40 mx-auto max-w-[520px] rounded-2xl p-4 shadow-xl border backdrop-blur" style={{background:"var(--surface)",borderColor:"var(--border)"}}>
-          <div className="flex items-start gap-3"><Download className="w-5 h-5 mt-0.5" style={{color:"var(--accent)"}}/><div className="flex-1"><p className="font-semibold text-sm">Install Neto</p><p className="text-xs mt-1" style={{color:"var(--muted)"}}>Install it like an app for faster access and a standalone window.</p></div><button onClick={()=>{setInstallDismissed(true);localStorage.setItem("voice-orb-install-dismissed","1")}} aria-label="Dismiss" className="text-sm opacity-60">×</button></div>
-          <button onClick={installApp} className="mt-3 w-full h-10 rounded-full text-sm font-semibold text-white" style={{background:"var(--accent)"}}>Install app</button>
+          <div className="flex items-start gap-3"><Download className="w-5 h-5 mt-0.5" style={{color:"var(--accent)"}}/><div className="flex-1"><p className="font-semibold text-sm">Install Neto</p><p className="text-xs mt-1" style={{color:"var(--muted)"}}>{manualInstallInfo && !installPrompt ? `A couple of taps on ${manualInstallInfo.platform}.` : "Install it like an app for faster access and a standalone window."}</p></div><button onClick={()=>{setInstallDismissed(true);localStorage.setItem("voice-orb-install-dismissed","1")}} aria-label="Dismiss" className="text-sm opacity-60">×</button></div>
+          <button onClick={()=>installPrompt ? installApp() : setInstallOpen(true)} className="mt-3 w-full h-10 rounded-full text-sm font-semibold text-white" style={{background:"var(--accent)"}}>{installPrompt ? "Install app" : "Show me how"}</button>
         </div>
       )}
 
@@ -426,7 +479,7 @@ export default function App() {
 
       <Overlay open={menuOpen} onClose={()=>setMenuOpen(false)} side>
         <div className="px-7 pt-[max(24px,env(safe-area-inset-top))] pb-6 border-b" style={{borderColor:"var(--border)"}}><div className="w-10 h-10 rounded-full mb-4" style={{background:"linear-gradient(180deg,var(--orb-top),var(--orb-bottom))"}}/><h2 className="text-lg font-semibold">Neto</h2><p className="text-sm mt-1" style={{color:"var(--muted)"}}>Voice-first AI assistant</p></div>
-        <nav className="p-3 flex flex-col gap-1.5"><Action icon={<Plus/>} text="New chat" onClick={()=>{setMenuOpen(false);stopEverything();setTranscript("");setChatHistory([])}}/><Action icon={<Clock/>} text="History" onClick={()=>{setMenuOpen(false);setHistoryOpen(true)}}/><Action icon={<Settings/>} text="Settings" onClick={()=>{setMenuOpen(false);setSettingsOpen(true)}}/><Action icon={<UserRound/>} text="About creator" onClick={()=>{setMenuOpen(false);setAboutOpen(true)}}/><Action icon={<Download/>} text={isInstalled?"App installed":"Install app"} disabled={isInstalled} onClick={()=>{setMenuOpen(false);setInstallOpen(true)}}/></nav>
+        <nav className="p-3 flex flex-col gap-1.5"><Action icon={<Plus/>} text="New chat" onClick={()=>{setMenuOpen(false);intentionalStopRef.current=true;keepListeningRef.current=false;stopEverything();setTranscript("");setChatHistory([])}}/><Action icon={<Clock/>} text="History" onClick={()=>{setMenuOpen(false);setHistoryOpen(true)}}/><Action icon={<Settings/>} text="Settings" onClick={()=>{setMenuOpen(false);setSettingsOpen(true)}}/><Action icon={<UserRound/>} text="About creator" onClick={()=>{setMenuOpen(false);setAboutOpen(true)}}/><Action icon={<Download/>} text={isInstalled?"App installed":"Install app"} disabled={isInstalled} onClick={()=>{setMenuOpen(false);setInstallOpen(true)}}/></nav>
       </Overlay>
 
       <Overlay open={settingsOpen} onClose={()=>setSettingsOpen(false)} bottom>
@@ -434,7 +487,7 @@ export default function App() {
           <div className="space-y-6">
             <section><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Theme</label><div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-2">{THEMES.map(t=><button key={t.id} onClick={()=>setTheme(t.id)} className="p-3 rounded-2xl border text-left" style={{background:theme===t.id?"var(--accent-soft)":"var(--surface)",borderColor:theme===t.id?"var(--accent)":"var(--border)"}}><span className="text-sm font-semibold">{t.label}</span><span className="block text-[11px] mt-1" style={{color:"var(--muted)"}}>{t.description}</span></button>)}</div></section>
             <section><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Voice</label><div className="mt-3 grid grid-cols-3 gap-2">{["Sky","Cove","Breeze"].map(v=><button key={v} onClick={()=>setVoice(v)} className="h-12 rounded-full border text-sm font-semibold" style={{background:voice===v?"var(--text)":"var(--surface)",color:voice===v?"var(--bg)":"var(--text)",borderColor:"var(--border)"}}>{v}</button>)}</div></section>
-            <section><div className="flex items-center justify-between h-14 px-4 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><div><p className="text-sm font-semibold">Captions</p><p className="text-xs" style={{color:"var(--muted)"}}>Show spoken input and Neto replies above the orb</p></div><button aria-label="Toggle captions" onClick={()=>setCaptionsEnabled(v=>!v)} className="relative w-12 h-7 rounded-full" style={{background:captionsEnabled?"var(--accent)":"var(--border)"}}><span className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all" style={{left:captionsEnabled?25:3}}/></button></div></section><section><div className="flex items-center justify-between h-14 px-4 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><div><p className="text-sm font-semibold">Live voice</p><p className="text-xs" style={{color:"var(--muted)"}}>Gemini native audio-to-audio conversation</p></div><button aria-label="Toggle live voice" onClick={()=>{setVoiceMode(v=>!v); if (voiceMode) disconnectLive();}} className="relative w-12 h-7 rounded-full" style={{background:voiceMode?"var(--accent)":"var(--border)"}}><span className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all" style={{left:voiceMode?25:3}}/></button></div></section><section><div className="flex items-center justify-between"><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Speed</label><span className="text-xs font-medium px-2.5 py-1 rounded-full" style={{background:"var(--accent-soft)"}}>{speed.toFixed(1)}×</span></div><input aria-label="Voice speed" className="mt-4 w-full" type="range" min="0.7" max="1.4" step="0.1" value={speed} onChange={e=>setSpeed(parseFloat(e.target.value))}/></section>
+            <section><div className="flex items-center justify-between h-14 px-4 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><div><p className="text-sm font-semibold">Captions</p><p className="text-xs" style={{color:"var(--muted)"}}>Show spoken input and Neto replies above the orb</p></div><button aria-label="Toggle captions" onClick={()=>setCaptionsEnabled(v=>!v)} className="relative w-12 h-7 rounded-full" style={{background:captionsEnabled?"var(--accent)":"var(--border)"}}><span className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all" style={{left:captionsEnabled?25:3}}/></button></div></section><section><div className="flex items-center justify-between h-14 px-4 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><div><p className="text-sm font-semibold">Live voice</p><p className="text-xs" style={{color:"var(--muted)"}}>Gemini native audio-to-audio conversation</p></div><button aria-label="Toggle live voice" onClick={()=>{setVoiceMode(v=>!v); if (voiceMode) { intentionalStopRef.current=true; keepListeningRef.current=false; disconnectLive(); }}} className="relative w-12 h-7 rounded-full" style={{background:voiceMode?"var(--accent)":"var(--border)"}}><span className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all" style={{left:voiceMode?25:3}}/></button></div></section><section><div className="flex items-center justify-between"><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Speed</label><span className="text-xs font-medium px-2.5 py-1 rounded-full" style={{background:"var(--accent-soft)"}}>{speed.toFixed(1)}×</span></div><input aria-label="Voice speed" className="mt-4 w-full" type="range" min="0.7" max="1.4" step="0.1" value={speed} onChange={e=>setSpeed(parseFloat(e.target.value))}/></section>
             <div className="flex items-center justify-between h-14 px-4 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><div><p className="text-sm font-semibold">Background sounds</p><p className="text-xs" style={{color:"var(--muted)"}}>Soft ambient hum while listening</p></div><button aria-label="Toggle background sounds" onClick={()=>setAmbientSounds(v=>!v)} className="relative w-12 h-7 rounded-full" style={{background:ambientSounds?"var(--accent)":"var(--border)"}}><span className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all" style={{left:ambientSounds?25:3}}/></button></div>
             <button onClick={()=>setInstallOpen(true)} className="w-full h-12 rounded-full text-sm font-semibold border" style={{background:"var(--accent-soft)",borderColor:"var(--accent)"}}>{isInstalled?"Neto is installed":"Install Neto"}</button>
           </div>
@@ -454,7 +507,14 @@ export default function App() {
       </Overlay>
 
       <Overlay open={installOpen} onClose={()=>setInstallOpen(false)} bottom>
-        <div className="mx-auto max-w-[560px] px-6 pt-3 pb-[max(20px,env(safe-area-inset-bottom))]"><div className="flex justify-center pb-4"><div className="w-9 h-1 rounded-full bg-black/10"/></div><div className="flex items-center gap-3"><Download className="w-6 h-6" style={{color:"var(--accent)"}}/><div><h3 className="text-lg font-semibold">Install Neto</h3><p className="text-sm" style={{color:"var(--muted)"}}>{isInstalled?"The app is already installed on this device.":installPrompt?"Install Neto as a standalone app.":"Your browser will show its supported installation option when available."}</p></div></div>{!isInstalled&&<button disabled={!installPrompt} onClick={installApp} className="mt-6 w-full h-12 rounded-full text-white font-semibold disabled:opacity-40" style={{background:"var(--accent)"}}>{installPrompt?"Install now":"Use your browser's Install / Add to Home Screen option"}</button>}<button onClick={()=>setInstallOpen(false)} className="mt-2 w-full h-11 rounded-full text-sm" style={{color:"var(--muted)"}}>Close</button></div>
+        <div className="mx-auto max-w-[560px] px-6 pt-3 pb-[max(20px,env(safe-area-inset-bottom))]"><div className="flex justify-center pb-4"><div className="w-9 h-1 rounded-full bg-black/10"/></div><div className="flex items-center gap-3"><Download className="w-6 h-6" style={{color:"var(--accent)"}}/><div><h3 className="text-lg font-semibold">Install Neto</h3><p className="text-sm" style={{color:"var(--muted)"}}>{isInstalled?"The app is already installed on this device.":manualInstallInfo?`${manualInstallInfo.platform} doesn't support one-tap install — add it manually:`:installPrompt?"Install Neto as a standalone app.":"Your browser will show its supported installation option when available."}</p></div></div>
+        {!isInstalled && manualInstallInfo && (
+          <ol className="mt-4 space-y-2 text-sm list-decimal list-inside" style={{color:"var(--text)"}}>
+            {manualInstallInfo.steps.map((step, i) => <li key={i}>{step}</li>)}
+          </ol>
+        )}
+        {!isInstalled && !manualInstallInfo && <button disabled={!installPrompt} onClick={installApp} className="mt-6 w-full h-12 rounded-full text-white font-semibold disabled:opacity-40" style={{background:"var(--accent)"}}>{installPrompt?"Install now":"Use your browser's Install / Add to Home Screen option"}</button>}
+        <button onClick={()=>setInstallOpen(false)} className="mt-2 w-full h-11 rounded-full text-sm" style={{color:"var(--muted)"}}>Close</button></div>
       </Overlay>
     </div>
   );

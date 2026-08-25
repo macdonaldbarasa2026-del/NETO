@@ -7,5 +7,7 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: GEMINI_API_KEY
+        sync: false
       - key: FIREBASE_SERVICE_ACCOUNT_KEY
         sync: false
