@@ -9,9 +9,11 @@ import { GoogleGenAI, Modality } from "@google/genai";
 type Status = "idle" | "listening" | "thinking" | "speaking";
 type Theme = "light" | "dark" | "midnight" | "warm" | "contrast";
 
-type Message = { role: "user" | "model"; parts: { text: string }[] };\ntype ImageAttachment = { name: string; mimeType: string; data: string; url: string };
+type Message = { role: "user" | "model"; parts: { text: string }[] };
+type ImageAttachment = { name: string; mimeType: string; data: string; url: string };
 
-const CREATOR = { name: "Macdonald Barasa", role: "Creator of Neto" };\nconst APP_IDENTITY = { name: "Neto", company: "Neto", product: "Neto AI assistant", creator: CREATOR.name };
+const CREATOR = { name: "Macdonald Barasa", role: "Creator of Neto" };
+const APP_IDENTITY = { name: "Neto", company: "Neto", product: "Neto AI assistant", creator: CREATOR.name };
 const THEMES: { id: Theme; label: string; description: string }[] = [
   { id: "light", label: "Light", description: "Clean GPT-style light interface" },
   { id: "dark", label: "Dark", description: "Low-light assistant interface" },
@@ -43,7 +45,8 @@ function OrbSparkles({ status, energy }: { status: Status; energy: number }) {
 export default function App() {
   const [status, setStatus] = useState<Status>("idle");
   const [transcript, setTranscript] = useState("");
-  const [draftText, setDraftText] = useState("");\n  const [imageAttachment, setImageAttachment] = useState<ImageAttachment | null>(null);
+  const [draftText, setDraftText] = useState("");
+  const [imageAttachment, setImageAttachment] = useState<ImageAttachment | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
