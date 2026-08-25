@@ -10,7 +10,13 @@ type Status = "idle" | "listening" | "thinking" | "speaking";
 type Theme = "light" | "dark" | "midnight" | "warm" | "contrast";
 
 type Message = { role: "user" | "model"; parts: { text: string }[] };
-type ImageAttachment = { name: string; mimeType: string; data: string; url: string };
+type FileAttachment = { name: string; mimeType: string; data: string; size: number; url?: string; textContent?: string };
+
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+const MAX_TEXT_FILE_CHARS = 100000;
+const ALLOWED_TEXT_TYPES = new Set(["text/plain", "text/markdown", "text/csv", "text/html", "text/xml", "application/json"]);
+const isSupportedUpload = (file: File) => file.type.startsWith("image/") || file.type.startsWith("audio/") || file.type === "application/pdf" || ALLOWED_TEXT_TYPES.has(file.type) || /\.(txt|md|csv|json|xml|html|pdf)$/i.test(file.name);
+
 
 const CREATOR = { name: "Macdonald Barasa", role: "Creator of Neto" };
 const APP_IDENTITY = { name: "Neto", company: "Neto", product: "Neto AI assistant", creator: CREATOR.name };
@@ -46,7 +52,8 @@ export default function App() {
   const [status, setStatus] = useState<Status>("idle");
   const [transcript, setTranscript] = useState("");
   const [draftText, setDraftText] = useState("");
-  const [imageAttachment, setImageAttachment] = useState<ImageAttachment | null>(null);
+  const [fileAttachment, setFileAttachment] = useState<FileAttachment | null>(null);
+  const [uploadError, setUploadError] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -295,11 +302,11 @@ export default function App() {
     window.speechSynthesis?.speak(utterance);
   }), [isMuted, speed, pickVoice, startAmbient, stopAmbient]);
 
-  const handleMessage = useCallback(async (text: string, attachment?: ImageAttachment | null) => {
-    if (!text.trim()) return;
+  const handleMessage = useCallback(async (text: string, attachment?: FileAttachment | null) => {
+    if (!text.trim() && !attachment) return;
     stopEverything();
     setStatus("thinking");
-    setChatHistory(prev => [...prev, { role: "user", parts: [{ text: attachment ? `${text || "Image attached"} [${attachment.name}]` : text }] }]);
+    setChatHistory(prev => [...prev.slice(-19), { role: "user", parts: [{ text: attachment ? `${text || "Please analyze the attached file."} [${attachment.name}]` : text }] }]);
     const controller = new AbortController(); requestAbortRef.current = controller;
     const clientContext = {
       creator: CREATOR,
@@ -312,7 +319,7 @@ export default function App() {
     try {
       const response = await fetch("/api/chat-stream", {
         method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
-        body: JSON.stringify({ message: text, history: chatHistory, image: attachment ? { mimeType: attachment.mimeType, data: attachment.data, name: attachment.name } : null, clientContext }),
+        body: JSON.stringify({ message: text, history: chatHistory.slice(-20), attachment: attachment ? { mimeType: attachment.mimeType, data: attachment.data, name: attachment.name, size: attachment.size, textContent: attachment.textContent } : null, clientContext }),
       });
       if (!response.ok) {
         let serverMessage = "";
@@ -334,7 +341,7 @@ export default function App() {
         }
         if (!isMuted && buffer.trim()) await speakSentence(buffer.trim());
       }
-      setChatHistory(prev => [...prev, { role: "model", parts: [{ text: fullResponse || buffer }] }]);
+      setChatHistory(prev => [...prev.slice(-20), { role: "model", parts: [{ text: fullResponse || buffer }] }]);
       setStatus("idle");
       void spoken;
     } catch (error: any) {
@@ -407,7 +414,7 @@ export default function App() {
     });
   }, [disconnectLive, status, stopAmbient]);
 
-  const submitText = useCallback(() => { const text = draftText.trim(); if (text || imageAttachment) { const attachment = imageAttachment; setDraftText(""); setImageAttachment(null); void handleMessage(text || "Please analyze this image.", attachment); } }, [draftText, imageAttachment, handleMessage]);
+  const submitText = useCallback(() => { const text = draftText.trim(); if (text || fileAttachment) { const attachment = fileAttachment; setDraftText(""); setFileAttachment(null); setUploadError(""); void handleMessage(text || "Please analyze the attached file.", attachment); } }, [draftText, fileAttachment, handleMessage]);
 
   const installApp = useCallback(async () => {
     if (installPrompt) {
@@ -481,12 +488,13 @@ export default function App() {
       <div className="absolute bottom-0 left-0 right-0 z-20 px-4 sm:px-6 pb-[max(18px,env(safe-area-inset-bottom))] pt-4" style={{background:"linear-gradient(to top,var(--bg) 35%,transparent)"}}>
         <div className="mx-auto max-w-[560px] flex items-center gap-2.5">
           <div className="flex-1 h-[52px] rounded-full shadow-sm border flex items-center pl-2 pr-3 gap-2.5" style={{background:"var(--surface-solid)",borderColor:"var(--border)"}}>
-            <button aria-label="Attach image or file" onClick={()=>{const input=document.createElement("input");input.type="file";input.accept="image/*,.txt,.md,.json,.csv,text/plain,application/json,text/csv";input.onchange=()=>{const file=input.files?.[0];if(!file)return;if(file.type.startsWith("image/")){const reader=new FileReader();reader.onload=()=>{const result=String(reader.result||"");const comma=result.indexOf(",");setImageAttachment({name:file.name,mimeType:file.type,data:comma>=0?result.slice(comma+1):result,url:result})};reader.readAsDataURL(file);}else{const reader=new FileReader();reader.onload=()=>{setDraftText(String(reader.result||"").slice(0,12000))};reader.readAsText(file)}};input.click()}} className="w-9 h-9 rounded-full flex items-center justify-center transition shrink-0" style={{background:"var(--accent-soft)"}}>{imageAttachment?<ImagePlus className="w-5 h-5"/>:<Plus className="w-5 h-5"/>}</button>
-            <div className="flex-1 min-w-0 relative">{imageAttachment&&<div className="absolute bottom-[44px] left-0 flex items-center gap-2 rounded-xl border p-1.5 shadow-sm" style={{background:"var(--surface-solid)",borderColor:"var(--border)"}}><img src={imageAttachment.url} alt="Selected screenshot" className="w-12 h-12 rounded-lg object-cover"/><button aria-label="Remove image" onClick={()=>setImageAttachment(null)} className="w-6 h-6 rounded-full flex items-center justify-center" style={{background:"var(--accent-soft)"}}><X className="w-3.5 h-3.5"/></button></div>}<input aria-label="Message" value={draftText} onChange={e=>setDraftText(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")submitText()}} placeholder={status==="listening"?"Listening…":"Type a message…"} className="w-full bg-transparent outline-none text-[15px]" style={{color:"var(--text)"}} />{draftText.trim()&&<button aria-label="Send" onClick={submitText} className="absolute top-1/2 -translate-y-1/2 right-0 w-8 h-8 rounded-full flex items-center justify-center text-white" style={{background:"var(--accent)"}}><Send className="w-4 h-4"/></button>}</div>
+            <button aria-label="Attach image or file" onClick={()=>{const input=document.createElement("input");input.type="file";input.accept="image/*,audio/*,application/pdf,text/*,.json,.csv,.md,.txt,.xml,.html";input.onchange=()=>{const file=input.files?.[0];if(!file)return;setUploadError("");if(file.size>MAX_UPLOAD_BYTES){setUploadError("That file is too large. Maximum size is 10 MB.");return;}if(!isSupportedUpload(file)){setUploadError("This file type is not supported. Use an image, PDF, audio, or text file.");return;}const isText = file.type.startsWith("text/") || ALLOWED_TEXT_TYPES.has(file.type) || /\.(txt|md|csv|json|xml|html)$/i.test(file.name);const reader=new FileReader();reader.onload=()=>{const result=String(reader.result||"");if(isText){setFileAttachment({name:file.name,mimeType:file.type||"text/plain",data:"",size:file.size,textContent:result.slice(0,MAX_TEXT_FILE_CHARS)});return;}const comma=result.indexOf(",");const data=comma>=0?result.slice(comma+1):result;setFileAttachment({name:file.name,mimeType:file.type||"application/octet-stream",data,size:file.size,url:file.type.startsWith("image/")?result:undefined});};if(isText) reader.readAsText(file); else reader.readAsDataURL(file);};input.click()}} className="w-9 h-9 rounded-full flex items-center justify-center transition shrink-0" style={{background:"var(--accent-soft)"}}>{fileAttachment?.mimeType.startsWith("image/")?<ImagePlus className="w-5 h-5"/>:<Plus className="w-5 h-5"/>}</button>
+            <div className="flex-1 min-w-0 relative">{fileAttachment&&<div className="absolute bottom-[44px] left-0 max-w-[85vw] flex items-center gap-2 rounded-xl border p-1.5 shadow-sm" style={{background:"var(--surface-solid)",borderColor:"var(--border)"}}>{fileAttachment.url?<img src={fileAttachment.url} alt="Selected upload" className="w-12 h-12 rounded-lg object-cover"/>:<div className="w-12 h-12 rounded-lg flex items-center justify-center text-xs font-bold" style={{background:"var(--accent-soft)"}}>FILE</div>}<span className="max-w-[180px] truncate text-xs">{fileAttachment.name}</span><button aria-label="Remove file" onClick={()=>setFileAttachment(null)} className="w-6 h-6 rounded-full flex items-center justify-center" style={{background:"var(--accent-soft)"}}><X className="w-3.5 h-3.5"/></button></div>}<input aria-label="Message" value={draftText} onChange={e=>setDraftText(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")submitText()}} placeholder={status==="listening"?"Listening…":"Type a message…"} className="w-full bg-transparent outline-none text-[15px]" style={{color:"var(--text)"}} />{(draftText.trim()||fileAttachment)&&<button aria-label="Send" onClick={submitText} className="absolute top-1/2 -translate-y-1/2 right-0 w-8 h-8 rounded-full flex items-center justify-center text-white" style={{background:"var(--accent)"}}><Send className="w-4 h-4"/></button>}</div>
           </div>
           <button aria-label={isMicMuted?"Unmute microphone":"Mute microphone"} onClick={toggleMic} className="w-[52px] h-[52px] rounded-full flex items-center justify-center shadow-sm border shrink-0" style={{background:isMicMuted?"rgba(239,68,68,.12)":"var(--surface-solid)",borderColor:"var(--border)",color:isMicMuted?"#ef4444":"var(--text)"}}>{isMicMuted?<MicOff className="w-5 h-5"/>:<Mic className="w-5 h-5"/>}</button>
           <button aria-label="End conversation" onClick={()=>setEndConfirmOpen(true)} className="w-[52px] h-[52px] rounded-full text-white flex items-center justify-center shadow-md shrink-0" style={{background:"var(--text)"}}><X className="w-5 h-5"/></button>
         </div>
+        {uploadError&&<p role="alert" className="mt-2 text-center text-xs" style={{color:"#dc2626"}}>{uploadError}</p>}
       </div>
 
       <Overlay open={menuOpen} onClose={()=>setMenuOpen(false)} side>
