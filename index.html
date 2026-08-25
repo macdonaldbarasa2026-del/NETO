@@ -4,15 +4,56 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#f7f7f8" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="preload" as="image" href="/splash/neto-splash.png" fetchpriority="high" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Neto" />
-    <link rel="manifest" href="/manifest.json" />
-    <link rel="icon" href="/icons/icon-192.png" />
-    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
-    <title>Neto</title>
+    <meta name="application-name" content="Neto" />
     <meta name="description" content="Neto — a voice-first AI assistant created by Macdonald Barasa." />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" type="image/png" sizes="64x64" href="/icons/favicon-64.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" sizes="192x192" href="/icons/icon-192.png" />
+    <title>Neto</title>
+    <style>
+      #neto-splash-screen {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        display: grid;
+        place-items: center;
+        background: #f7f7f8;
+        opacity: 1;
+        visibility: visible;
+        transition: opacity 260ms ease, visibility 260ms ease;
+      }
+      #neto-splash-screen.is-hidden {
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+      }
+      #neto-splash-screen img {
+        display: block;
+        width: min(76vw, 420px);
+        height: auto;
+        max-height: 76vh;
+        object-fit: contain;
+      }
+      @media (prefers-color-scheme: dark) {
+        #neto-splash-screen { background: #f7f7f8; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #neto-splash-screen { transition: none; }
+      }
+    </style>
   </head>
-  <body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body>
+  <body>
+    <div id="neto-splash-screen" role="status" aria-label="Starting Neto">
+      <img src="/splash/neto-splash.png" alt="Neto — Connect. Share. Grow." />
+    </div>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>

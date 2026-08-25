@@ -134,7 +134,19 @@ export default function App() {
   }, [installDismissed]);
 
   useEffect(() => {
-    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" }).catch(() => undefined);
+    }
+
+    // Render free services can sleep. Warm the backend silently after the
+    // cached UI is already visible so users never see a Render wake-up page.
+    if (navigator.onLine) {
+      const timer = window.setTimeout(() => {
+        fetch("/api/health", { cache: "no-store", credentials: "same-origin", keepalive: true }).catch(() => undefined);
+      }, 1200);
+      return () => window.clearTimeout(timer);
+    }
+    return undefined;
   }, []);
 
   const stopAmbient = useCallback(() => {
