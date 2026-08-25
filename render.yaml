@@ -1,11 +1,11 @@
 services:
   - type: web
-    name: neto
-    runtime: node
+    name: react-firebase-backend
+    env: node
     buildCommand: npm install && npm run build
     startCommand: npm start
     envVars:
-      - key: GEMINI_API_KEY
+      - key: NODE_ENV
+        value: production
+      - key: FIREBASE_SERVICE_ACCOUNT_KEY
         sync: false
-      - key: GEMINI_TEXT_MODEL
-        value: gemini-2.5-flash

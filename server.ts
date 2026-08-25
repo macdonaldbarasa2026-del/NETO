@@ -1,1 +1,247 @@
-import express from 'express';import{GoogleGenAI}from'@google/genai';import path from'node:path';import{fileURLToPath}from'node:url';const app=express(),port=Number(process.env.PORT||3000),key=process.env.GEMINI_API_KEY||'',ai=key?new GoogleGenAI({apiKey:key}):null,__dirname=path.dirname(fileURLToPath(import.meta.url));app.use(express.json({limit:'256kb'}));app.post('/api/chat',async(req,res)=>{try{const messages=Array.isArray(req.body?.messages)?req.body.messages:[];const contents=messages.slice(-20).map((m:any)=>({role:m?.role==='user'?'user':'model',parts:[{text:String(m?.text||'').slice(0,8000)}]}));if(!contents.length)return res.status(400).json({error:'Message is required.'});if(!ai)return res.status(503).json({error:'GEMINI_API_KEY is not configured on the server.'});const r=await ai.models.generateContent({model:process.env.GEMINI_TEXT_MODEL||'gemini-2.5-flash',contents,config:{systemInstruction:'You are NETO, a concise, helpful voice-first AI companion. Answer naturally and directly.'}});res.json({text:r.text||'I could not generate a response.'})}catch(e){console.error(e);res.status(500).json({error:'NETO could not complete that request.'})}});app.use(express.static(path.join(__dirname,'dist')));app.get('/{*splat}',(_req,res)=>res.sendFile(path.join(__dirname,'dist','index.html')));app.listen(port,()=>console.log(`NETO listening on ${port}`));
+import express from "express";
+import path from "path";
+import { createServer as createViteServer } from "vite";
+import cors from "cors";
+import { initializeApp, getApps, cert } from "firebase-admin/app";
+import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { GoogleGenAI } from "@google/genai";
+
+let ai: GoogleGenAI | null = null;
+if (process.env.GEMINI_API_KEY) {
+  ai = new GoogleGenAI({
+    apiKey: process.env.GEMINI_API_KEY,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      }
+    }
+  });
+}
+
+// Initialize Firebase Admin (Only initialize if credentials exist to prevent crashing on boot)
+// In production on Render, you should provide a FIREBASE_SERVICE_ACCOUNT_KEY env var
+const serviceAccountKey = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+if (serviceAccountKey) {
+  try {
+    const serviceAccount = JSON.parse(serviceAccountKey);
+    if (!getApps().length) {
+      initializeApp({
+        credential: cert(serviceAccount)
+      });
+      console.log("Firebase Admin initialized");
+    }
+  } catch (error) {
+    console.error("Failed to parse FIREBASE_SERVICE_ACCOUNT_KEY or initialize admin", error);
+  }
+} else {
+  console.warn("FIREBASE_SERVICE_ACCOUNT_KEY not found. Firebase Admin is not initialized.");
+}
+
+async function startServer() {
+  const app = express();
+  const PORT = 3000;
+
+  app.use(cors());
+  app.use(express.json());
+
+  // --- API Routes ---
+  app.get("/api/health", (req, res) => {
+    res.json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+
+  // Example API route interacting with Firestore
+  app.get("/api/data", async (req, res) => {
+    try {
+      if (!getApps().length) {
+        return res.status(503).json({ error: "Firebase Admin is not configured" });
+      }
+      
+      const db = getFirestore();
+      const snapshot = await db.collection("items").limit(10).get();
+      const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      
+      res.json({ items });
+    } catch (error) {
+      console.error("Error fetching from Firestore", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // --- WebSocket Server for Live API ---
+  const { WebSocketServer } = await import("ws");
+  const httpServer = app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+  });
+
+  const wss = new WebSocketServer({ server: httpServer, path: "/live" });
+
+  wss.on("connection", async (clientWs, req) => {
+    try {
+      if (!ai) {
+        clientWs.send(JSON.stringify({ error: "Gemini API is not configured" }));
+        clientWs.close();
+        return;
+      }
+      
+      const session = await ai.live.connect({
+        model: "gemini-3.1-flash-live-preview",
+        config: {
+          responseModalities: ["AUDIO"],
+          systemInstruction: `You are Neto, the AI assistant inside the Neto app. You were created for Neto by Macdonald Barasa. Your product/company identity is Neto. Do not claim OpenAI created you. Give brief, immediate conversational replies, normally 1-2 short sentences unless the user asks for detail. Never use markdown in voice replies. Be natural, friendly, and fast.`,
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
+        },
+        callbacks: {
+          onmessage: (message: any) => {
+            const content = message.serverContent;
+            const audio = content?.modelTurn?.parts?.[0]?.inlineData?.data;
+            if (audio) clientWs.send(JSON.stringify({ audio }));
+            if (content?.interrupted)
+              clientWs.send(JSON.stringify({ interrupted: true }));
+            if (content?.inputTranscription?.text)
+              clientWs.send(JSON.stringify({ inputTranscription: content.inputTranscription.text }));
+            if (content?.outputTranscription?.text)
+              clientWs.send(JSON.stringify({ outputTranscription: content.outputTranscription.text }));
+            if (content?.turnComplete)
+              clientWs.send(JSON.stringify({ turnComplete: true }));
+          },
+        },
+      });
+
+      clientWs.on("message", (data) => {
+        try {
+          const { audio } = JSON.parse(data.toString());
+          if (audio) {
+            session.sendRealtimeInput({
+              audio: { data: audio, mimeType: "audio/pcm;rate=16000" },
+            });
+          }
+        } catch (e) {
+          console.error("Error processing websocket message", e);
+        }
+      });
+      
+      clientWs.on("close", () => {
+        // cleanup session if possible
+      });
+    } catch (e: any) {
+      console.error("Failed to connect to Live API", e);
+      try {
+        const isRateLimit = e?.status === 429 || (e?.message && e.message.includes("429"));
+        const errorMsg = isRateLimit 
+          ? "Sorry, you have reached the limit. Please try again later."
+          : "Sorry, my voice systems are overloaded. Please try again in a moment.";
+        clientWs.send(JSON.stringify({ 
+          outputTranscription: errorMsg,
+          turnComplete: true
+        }));
+      } catch (err) {}
+      setTimeout(() => clientWs.close(), 500);
+    }
+  });
+
+  // Chat API stream route integrating Gemini & Firestore
+  app.post("/api/chat-stream", async (req, res) => {
+    try {
+      if (!ai) {
+        return res.status(503).json({ error: "Gemini API is not configured" });
+      }
+
+      const { message, history = [], sessionId = "default-session", clientContext = {}, image = null } = req.body;
+      
+      const userParts: any[] = [{ text: message || "Please analyze the attached image." }];
+      if (image?.data && image?.mimeType?.startsWith("image/")) {
+        userParts.push({ inlineData: { mimeType: image.mimeType, data: image.data } });
+      }
+      const contents = [...history, { role: "user", parts: userParts }];
+
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Transfer-Encoding', 'chunked');
+
+      const responseStream = await ai.models.generateContentStream({
+        model: "gemini-1.5-flash",
+        contents,
+        config: {
+          systemInstruction: `You are Neto, the AI assistant inside the Neto app.
+Identity rules:
+- Your name is Neto.
+- The product/company identity is Neto.
+- The verified creator is Macdonald Barasa.
+- Do not claim you were created by OpenAI. OpenAI is not your creator identity for this app.
+- Gemini is only the underlying AI technology used by the application when relevant; it is not your name or creator.
+- If asked who created you or the app, answer: "I was created for Neto by Macdonald Barasa."
+- Do not invent biography, location, contact details, social links, achievements, ownership, or company history for Macdonald Barasa.
+- Be honest about capabilities. You can analyze text and, when an image is attached, inspect the image and explain what you can see.
+- When an image/screenshot is attached, use its visual information to answer the user's question. Do not pretend you saw an image if none was provided.
+Conversation rules:
+- Answer text messages normally and directly. Never require voice input for a text question.
+- Keep replies concise by default, but give detail when requested.
+- In voice mode, avoid markdown; in text mode, normal formatting is allowed.
+Installation awareness:
+- Neto is a Progressive Web App (PWA).
+- If installed is false and the user asks to install, explain that the app's Install button or browser Add to Home Screen/Install option should be used.
+- Never falsely claim installation succeeded.
+Client context: ${JSON.stringify(clientContext)}`,
+        }
+      });
+
+      let fullText = "";
+      for await (const chunk of responseStream) {
+        if (chunk.text) {
+          fullText += chunk.text;
+          res.write(chunk.text);
+        }
+      }
+      res.end();
+
+      // Attempt to save to Firestore
+      if (getApps().length) {
+        try {
+          const db = getFirestore();
+          const sessionRef = db.collection("conversations").doc(sessionId);
+          await sessionRef.collection("messages").add({
+            role: "user",
+            text: message,
+            timestamp: FieldValue.serverTimestamp()
+          });
+          await sessionRef.collection("messages").add({
+            role: "model",
+            text: fullText,
+            timestamp: FieldValue.serverTimestamp()
+          });
+        } catch (dbError) {
+          console.error("Failed to save to Firestore:", dbError);
+        }
+      }
+    } catch (error: any) {
+      console.error("Error in /api/chat-stream:", error);
+      const isRateLimit = error?.status === 429 || (error?.message && error.message.includes("429"));
+      const errorMsg = isRateLimit
+        ? "Sorry, you have reached the limit. Please try again later."
+        : "Sorry, my systems are currently overloaded. Please try again in a moment.";
+      if (!res.headersSent) {
+        res.status(isRateLimit ? 429 : 500).json({ error: errorMsg, details: error.message });
+      } else {
+        res.write(errorMsg);
+        res.end();
+      }
+    }
+  });
+
+  // --- Vite / Static Middleware ---
+  if (process.env.NODE_ENV !== "production") {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath));
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
+    });
+  }
+}
+
+startServer();
