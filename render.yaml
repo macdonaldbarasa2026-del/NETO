@@ -9,5 +9,13 @@ services:
         value: production
       - key: GEMINI_API_KEY
         sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_PRO_MODEL
+        value: gpt-5.6
+      - key: OPENAI_PRO_REALTIME_MODEL
+        value: gpt-realtime-2.1
+      - key: OPENAI_PRO_VOICE
+        value: marin
       - key: FIREBASE_SERVICE_ACCOUNT_KEY
         sync: false

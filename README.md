@@ -1,55 +1,35 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Neto PWA
 
-# Run and deploy your AI Studio app
+## AI modes
 
-This contains everything you need to run your app locally.
+Neto has two user-facing AI modes:
 
-View your app in AI Studio: https://ai.studio/apps/bfd77777-aadb-4e1a-bbe0-6133213c747a
+- Normal: Gemini handles text, images/files, and live voice.
+- Pro: OpenAI handles text, images/files, and live voice when `OPENAI_API_KEY` is configured on Render.
 
-## Run Locally
+The provider names are intentionally hidden from the Neto UI. Users only see Normal and Pro.
 
-**Prerequisites:**  Node.js
+## Render environment variables
 
-
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
-
-## PWA / standalone behavior
-
-Neto is configured as an installable standalone PWA for PWABuilder-style packaging. The service worker precaches the Vite production app shell and static assets, then serves the cached shell immediately on navigation. This prevents a sleeping Render instance from blocking the installed app's startup UI.
-
-The app also performs a silent `/api/health` warm-up shortly after launch when an internet connection is available. This can wake a sleeping Render backend without exposing a Render loading/wake page to the user. AI/API operations still require connectivity and the backend; the user-facing app shell remains available offline.
-
-## Firebase + Render setup
-
-Neto now uses Firebase Storage for user attachments and Firebase Authentication with anonymous sign-in for upload ownership. The browser uploads files directly to Firebase, which keeps large files away from the Render request path.
-
-### Firebase Console
-
-1. Open the Firebase project `project-bcceb490-51e7-4695-b98`.
-2. Enable Authentication > Sign-in method > Anonymous.
-3. Create or enable Storage.
-4. Deploy the included `storage.rules`.
-5. Enable Firestore if you want conversation history saved by the Render backend.
-
-### Render
-
-Set these environment variables in the Render service:
+Set these in Render:
 
 - `GEMINI_API_KEY`
-- `FIREBASE_SERVICE_ACCOUNT_KEY`, as a JSON service-account string if Firestore persistence is required.
+- `OPENAI_API_KEY`
+- `FIREBASE_SERVICE_ACCOUNT_KEY`
 
-The Firebase web configuration is safe to ship in the frontend. Security comes from Firebase Authentication and Storage Rules. Never put a Firebase Admin service-account private key in frontend code or Git.
+Optional defaults already declared in `render.yaml`:
 
-### Upload limits
+- `OPENAI_PRO_MODEL=gpt-5.6`
+- `OPENAI_PRO_REALTIME_MODEL=gpt-realtime-2.1`
+- `OPENAI_PRO_VOICE=marin`
 
-- Maximum file size: 10 MB.
-- Images, PDF, text, JSON, CSV, XML, and HTML are accepted.
-- Files upload directly to Firebase Storage.
-- Supported images and PDFs are fetched by the Render backend only when the user asks Neto to analyze them.
-- Chat history sent to the AI is capped to the latest 20 messages.
+Never put a real API key in the frontend, ZIP, or Git repository.
+
+## Voice
+
+Normal voice uses the Gemini Live API.
+Pro voice uses the OpenAI Realtime API through the server websocket proxy. The browser sends microphone PCM to `/live?mode=pro`; the server resamples 16 kHz browser audio to the 24 kHz format required by the OpenAI realtime session and forwards returned audio to the browser.
+
+## Navigation
+
+Settings, History, About, and Install panels include Back navigation and browser back handling.

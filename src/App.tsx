@@ -3,9 +3,8 @@
  * Creator: Macdonald Barasa
  */
 import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
-import { Menu, Settings, Plus, Clock, Mic, MicOff, X, Send, Volume2, VolumeX, Download, UserRound, ArrowLeft, ImagePlus } from "lucide-react";
-import { GoogleGenAI, Modality } from "@google/genai";
-import { uploadAttachment } from "./lib/firebase";
+import { Menu, Settings, Plus, Clock, Mic, MicOff, X, Send, Volume2, VolumeX, Download, UserRound, ArrowLeft, ImagePlus, Trash2 } from "lucide-react";
+import { uploadAttachment, signInWithGoogle, logout, onAuthChange, saveConversation, loadRecentConversations, clearAllConversations } from "./lib/firebase";
 
 type Status = "idle" | "listening" | "thinking" | "speaking";
 type Theme = "light" | "dark" | "midnight" | "warm" | "contrast";
@@ -52,17 +51,37 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [clearHistoryConfirmOpen, setClearHistoryConfirmOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isMicMuted, setIsMicMuted] = useState(false);
   const [voice, setVoice] = useState("Sky");
   const [speed, setSpeed] = useState(1);
+  const [language, setLanguage] = useState(() => localStorage.getItem("voice-orb-lang") || "en-US");
   const [ambientSounds, setAmbientSounds] = useState(false);
   const [voiceMode, setVoiceMode] = useState(true);
+  const [aiMode, setAiMode] = useState<"normal" | "pro">(() => (localStorage.getItem("neto-ai-mode") as "normal" | "pro") || "normal");
   const [liveConnected, setLiveConnected] = useState(false);
   const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem("voice-orb-theme") as Theme) || "light");
   const [chatHistory, setChatHistory] = useState<Message[]>([]);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+
+  useEffect(() => {
+    const unsubscribe = onAuthChange((user) => {
+      setCurrentUser(user);
+      if (user) {
+        loadRecentConversations().then((conversations) => {
+          if (conversations && conversations.length > 0) {
+            setChatHistory(conversations[0].messages || []);
+          }
+        });
+      } else {
+        setChatHistory([]);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
   const [installPrompt, setInstallPrompt] = useState<any>(null);
   const [isInstalled, setIsInstalled] = useState(false);
   const [installDismissed, setInstallDismissed] = useState(() => localStorage.getItem("voice-orb-install-dismissed") === "1");
@@ -88,8 +107,14 @@ export default function App() {
   const micLevelRafRef = useRef<number | null>(null);
   const playbackContextRef = useRef<AudioContext | null>(null);
   const playbackTimeRef = useRef(0);
+  const playbackSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const keepListeningRef = useRef(false);
   const intentionalStopRef = useRef(false);
+  const liveOutputTextRef = useRef("");
+
+  useEffect(() => {
+    localStorage.setItem("neto-ai-mode", aiMode);
+  }, [aiMode]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -120,11 +145,11 @@ export default function App() {
     else if (!isIOS && isSafari) manual = { platform: "Mac (Safari)", steps: ["Click the Share icon in Safari's toolbar", 'Choose "Add to Dock"', 'Click "Add" to confirm'] };
     else if (isFirefox) manual = { platform: "Firefox", steps: ["Open the Firefox menu", 'Look for "Install" or "Add to Home screen" (only on Firefox versions that support it)'] };
     setManualInstallInfo(!standalone ? manual : null);
-    if (manual && !standalone && !installDismissed) setInstallOpen(true);
+    if (manual && !standalone && !installDismissed) openPanel(setInstallOpen);
     const onBeforeInstall = (event: Event) => {
       event.preventDefault();
       setInstallPrompt(event);
-      if (!standalone) setInstallOpen(true);
+      if (!standalone) openPanel(setInstallOpen);
     };
     const onInstalled = () => { setIsInstalled(true); setInstallPrompt(null); setInstallOpen(false); };
     window.addEventListener("beforeinstallprompt", onBeforeInstall as EventListener);
@@ -178,6 +203,7 @@ export default function App() {
     if (isMuted) return;
     const bytes = decodeBase64(base64);
     const ctx = playbackContextRef.current || new AudioContext(); playbackContextRef.current = ctx;
+    void ctx.resume();
     const samples = new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
     let peak = 0; for (let i = 0; i < samples.length; i += Math.max(1, Math.floor(samples.length / 160))) peak = Math.max(peak, Math.abs(samples[i]) / 32768);
     setOrbEnergy(Math.min(1, Math.max(0.12, peak * 2.4)));
@@ -185,13 +211,19 @@ export default function App() {
     const channel = buffer.getChannelData(0);
     for (let i = 0; i < samples.length; i++) channel[i] = samples[i] / 32768;
     const source = ctx.createBufferSource(); source.buffer = buffer; source.connect(ctx.destination);
+    playbackSourcesRef.current.add(source);
     const start = Math.max(ctx.currentTime + 0.01, playbackTimeRef.current || 0);
     source.start(start); playbackTimeRef.current = start + buffer.duration;
-    source.onended = () => { if (ctx.currentTime >= playbackTimeRef.current - 0.03) { speakingRef.current = false; setStatus("idle"); stopAmbient(); } };
+    source.onended = () => {
+      playbackSourcesRef.current.delete(source);
+      if (ctx.currentTime >= playbackTimeRef.current - 0.03 && playbackSourcesRef.current.size === 0) { speakingRef.current = false; setStatus("idle"); stopAmbient(); }
+    };
     speakingRef.current = true; setStatus("speaking"); startAmbient();
   }, [decodeBase64, isMuted, startAmbient, stopAmbient]);
 
   const disconnectLive = useCallback(() => {
+    keepListeningRef.current = false;
+    intentionalStopRef.current = true;
     try { liveSessionRef.current?.close(); } catch {}
     liveSessionRef.current = null;
     try { micProcessorRef.current?.disconnect(); } catch {}
@@ -200,67 +232,178 @@ export default function App() {
     try { micAnalyserRef.current?.disconnect(); } catch {}
     try { micContextRef.current?.close(); } catch {}
     try { micStreamRef.current?.getTracks().forEach(t => t.stop()); } catch {}
+    for (const source of playbackSourcesRef.current) { try { source.stop(); } catch {} }
+    playbackSourcesRef.current.clear();
+    playbackTimeRef.current = 0;
     micProcessorRef.current = null; micSourceRef.current = null; micAnalyserRef.current = null; micContextRef.current = null; micStreamRef.current = null; setOrbEnergy(0.12);
-    setLiveConnected(false); isListeningRef.current = false;
-  }, []);
+    setLiveConnected(false); isListeningRef.current = false; speakingRef.current = false; stopAmbient();
+  }, [stopAmbient]);
 
   const startLiveVoice = useCallback(async () => {
-    if (isMicMuted || !voiceMode) return;
+    if (isMicMuted || !voiceMode || liveSessionRef.current) return;
     keepListeningRef.current = true;
+    intentionalStopRef.current = false;
+    liveOutputTextRef.current = "";
     try {
-      const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const wsUrl = `${wsProtocol}//${window.location.host}/live`;
-      const ws = new WebSocket(wsUrl);
-      
-      ws.onopen = () => { setLiveConnected(true); setStatus("listening"); isListeningRef.current = true; };
-      
-      ws.onmessage = (event) => {
-        const msg = JSON.parse(event.data);
-        if (msg.audio) playLivePcm(msg.audio);
-        if (msg.interrupted) { playbackTimeRef.current = 0; speakingRef.current = false; setStatus("listening"); return; }
-        if (msg.inputTranscription) { setTranscript(msg.inputTranscription); transcriptRef.current = msg.inputTranscription; }
-        if (msg.outputTranscription) { setChatHistory(prev => [...prev, { role: "model", parts: [{ text: msg.outputTranscription }] }]); }
-        if (msg.turnComplete) { isListeningRef.current = true; setStatus("listening"); }
-      };
-      
-      ws.onerror = (e: any) => { console.error("Live API error", e); setTranscript("Voice connection error. Text chat is still available."); disconnectLive(); setStatus("idle"); };
-      ws.onclose = () => {
-        setLiveConnected(false); isListeningRef.current = false;
-        // Keep the mic "awake" until the user mutes: if this close wasn't requested by the user
-        // (e.g. the Live session timed out or the server dropped it), reconnect automatically.
-        if (!intentionalStopRef.current && keepListeningRef.current && !isMicMuted && voiceMode) {
-          setStatus("thinking");
-          setTimeout(() => { if (keepListeningRef.current && !isMicMuted && voiceMode) void startLiveVoice(); }, 400);
-        } else {
-          setStatus("idle");
-        }
-        intentionalStopRef.current = false;
-      };
-      
-      liveSessionRef.current = ws;
-      
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error("Microphone access is not supported here.");
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
       micStreamRef.current = stream;
-      const ctx = new AudioContext(); micContextRef.current = ctx; await ctx.resume();
-      const source = ctx.createMediaStreamSource(stream); micSourceRef.current = source;
-      const analyser = ctx.createAnalyser(); analyser.fftSize = 256; micAnalyserRef.current = analyser; source.connect(analyser);
+
+      const ctx = new AudioContext();
+      micContextRef.current = ctx;
+      await ctx.resume();
+      const source = ctx.createMediaStreamSource(stream);
+      micSourceRef.current = source;
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      micAnalyserRef.current = analyser;
+      source.connect(analyser);
+
       const levelData = new Uint8Array(analyser.frequencyBinCount);
-      const sampleMicLevel = () => { analyser.getByteTimeDomainData(levelData); let sum = 0; for (const value of levelData) { const n = (value - 128) / 128; sum += n * n; } setOrbEnergy(Math.min(1, Math.max(0.08, Math.sqrt(sum / levelData.length) * 3.5))); micLevelRafRef.current = requestAnimationFrame(sampleMicLevel); };
+      const sampleMicLevel = () => {
+        analyser.getByteTimeDomainData(levelData);
+        let sum = 0;
+        for (const value of levelData) { const n = (value - 128) / 128; sum += n * n; }
+        setOrbEnergy(Math.min(1, Math.max(0.08, Math.sqrt(sum / levelData.length) * 3.5)));
+        micLevelRafRef.current = requestAnimationFrame(sampleMicLevel);
+      };
       micLevelRafRef.current = requestAnimationFrame(sampleMicLevel);
-      const processor = ctx.createScriptProcessor(4096, 1, 1); micProcessorRef.current = processor;
-      
+
+      const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const ws = new WebSocket(`${wsProtocol}//${window.location.host}/live?mode=${encodeURIComponent(aiMode)}`);
+      liveSessionRef.current = ws;
+
+      const processor = ctx.createScriptProcessor(2048, 1, 1);
+      micProcessorRef.current = processor;
+      const silentGain = ctx.createGain();
+      silentGain.gain.value = 0;
+      source.connect(processor);
+      processor.connect(silentGain);
+      silentGain.connect(ctx.destination);
+
       processor.onaudioprocess = (event) => {
         if (!liveSessionRef.current || isMicMuted || liveSessionRef.current.readyState !== WebSocket.OPEN) return;
-        const input = event.inputBuffer.getChannelData(0); const ratio = ctx.sampleRate / 16000; const length = Math.floor(input.length / ratio); const pcm = new Int16Array(length);
-        for (let i = 0; i < length; i++) { const sample = input[Math.min(input.length - 1, Math.floor(i * ratio))]; pcm[i] = Math.max(-1, Math.min(1, sample)) * 32767; }
-        let binary = ""; const bytes = new Uint8Array(pcm.buffer); const step = 0x8000; for (let i=0;i<bytes.length;i+=step) binary += String.fromCharCode(...bytes.subarray(i,i+step));
+        const input = event.inputBuffer.getChannelData(0);
+        const ratio = ctx.sampleRate / 16000;
+        const length = Math.floor(input.length / ratio);
+        const pcm = new Int16Array(length);
+        for (let i = 0; i < length; i++) {
+          const sample = input[Math.min(input.length - 1, Math.floor(i * ratio))];
+          pcm[i] = Math.max(-1, Math.min(1, sample)) * 32767;
+        }
+        let binary = "";
+        const bytes = new Uint8Array(pcm.buffer);
+        const step = 0x8000;
+        for (let i = 0; i < bytes.length; i += step) binary += String.fromCharCode(...bytes.subarray(i, i + step));
         try { liveSessionRef.current.send(JSON.stringify({ audio: btoa(binary) })); } catch {}
       };
-      source.connect(processor); processor.connect(ctx.destination); setStatus("listening");
-    } catch (error) {
-      console.error(error); disconnectLive(); setTranscript("Live voice is unavailable right now. You can still type messages."); setStatus("idle");
+
+      ws.onopen = () => {
+        setLiveConnected(true);
+        setStatus("listening");
+        isListeningRef.current = true;
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.audio) playLivePcm(msg.audio);
+          if (msg.interrupted) {
+            for (const source of playbackSourcesRef.current) { try { source.stop(); } catch {} }
+            playbackSourcesRef.current.clear();
+            playbackTimeRef.current = 0;
+            speakingRef.current = false;
+            liveOutputTextRef.current = "";
+            setStatus("listening");
+            return;
+          }
+          if (msg.inputTranscription) {
+            setTranscript(msg.inputTranscription);
+            transcriptRef.current = msg.inputTranscription;
+          }
+          if (msg.outputTranscription) {
+            liveOutputTextRef.current += msg.outputTranscription;
+            if (captionsEnabled) setTranscript(liveOutputTextRef.current);
+          }
+          if (msg.turnComplete) {
+            const reply = liveOutputTextRef.current.trim();
+            if (reply) setChatHistory(prev => [...prev, { role: "model", parts: [{ text: reply }] }]);
+            liveOutputTextRef.current = "";
+            isListeningRef.current = true;
+            setStatus("listening");
+          }
+        } catch {}
+      };
+
+      ws.onerror = () => {
+        if (!intentionalStopRef.current) setTranscript("Voice connection failed. Please try again.");
+      };
+      ws.onclose = () => {
+        const shouldReconnect = !intentionalStopRef.current && keepListeningRef.current && !isMicMuted && voiceMode;
+        setLiveConnected(false);
+        isListeningRef.current = false;
+        liveSessionRef.current = null;
+        try { micProcessorRef.current?.disconnect(); } catch {}
+        try { micSourceRef.current?.disconnect(); } catch {}
+        try { if (micLevelRafRef.current) cancelAnimationFrame(micLevelRafRef.current); } catch {}
+        try { micAnalyserRef.current?.disconnect(); } catch {}
+        try { micContextRef.current?.close(); } catch {}
+        try { micStreamRef.current?.getTracks().forEach(t => t.stop()); } catch {}
+        micProcessorRef.current = null; micSourceRef.current = null; micAnalyserRef.current = null; micContextRef.current = null; micStreamRef.current = null;
+        if (shouldReconnect) {
+          setStatus("thinking");
+          window.setTimeout(() => { if (keepListeningRef.current && !isMicMuted && voiceMode && !liveSessionRef.current) void startLiveVoice(); }, 350);
+        } else { setStatus("idle"); stopAmbient(); }
+        intentionalStopRef.current = false;
+      };
+    } catch (error: any) {
+      console.error(error);
+      disconnectLive();
+      setTranscript(error?.name === "NotAllowedError" ? "Allow microphone access to use voice." : (error?.message || "Voice is unavailable right now."));
+      setStatus("idle");
     }
-  }, [disconnectLive, isInstalled, isMicMuted, playLivePcm, voiceMode]);
+  }, [aiMode, captionsEnabled, disconnectLive, isMicMuted, playLivePcm, stopAmbient, voiceMode]);
+
+  
+  const exportConversation = useCallback((format: 'txt' | 'json') => {
+    if (chatHistory.length === 0) return;
+    
+    let content = "";
+    let mimeType = "";
+    let extension = "";
+    
+    if (format === 'txt') {
+      content = chatHistory.map(m => `${m.role === 'user' ? 'You' : 'Neto'}:\n${m.parts[0].text}`).join('\n\n');
+      mimeType = 'text/plain';
+      extension = 'txt';
+    } else {
+      content = JSON.stringify(chatHistory, null, 2);
+      mimeType = 'application/json';
+      extension = 'json';
+    }
+    
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `neto_conversation_${new Date().toISOString().split('T')[0]}.${extension}`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [chatHistory]);
+
+  const endAndSaveConversation = async () => {
+    stopEverything();
+    setDraftText("");
+    setTranscript("");
+    transcriptRef.current = "";
+    setEndConfirmOpen(false);
+    if (chatHistory.length > 0 && currentUser) {
+      await saveConversation(chatHistory);
+    }
+  };
 
   const stopEverything = useCallback(() => {
     isListeningRef.current = false;
@@ -310,6 +453,7 @@ export default function App() {
       canOfferInstallPrompt: !!installPrompt,
       platform: navigator.platform,
       theme,
+      mode: aiMode,
     };
     try {
       const response = await fetch("/api/chat-stream", {
@@ -326,6 +470,7 @@ export default function App() {
             text: attachment.text || null,
           } : null,
           clientContext,
+          mode: aiMode,
         }),
       });
       if (!response.ok) {
@@ -341,12 +486,13 @@ export default function App() {
           const chunk = decoder.decode(value, { stream: true }); buffer += chunk; fullResponse += chunk;
           const match = buffer.match(/^([\s\S]*?[.!?](?:\s|$))/);
           if (match) {
-            const sentence = match[1].trim(); buffer = buffer.slice(match[1].length);
-            if (sentence) { spoken = true; await speakSentence(sentence); }
+            const sentence = match[1].trim();
+            buffer = buffer.slice(match[1].length);
+            if (sentence && !isMuted) { spoken = true; void speakSentence(sentence); }
           }
           if (isMuted) break;
         }
-        if (!isMuted && buffer.trim()) await speakSentence(buffer.trim());
+        if (!isMuted && buffer.trim()) { spoken = true; void speakSentence(buffer.trim()); }
       }
       setChatHistory(prev => [...prev, { role: "model", parts: [{ text: fullResponse || buffer }] }]);
       setStatus("idle");
@@ -359,7 +505,7 @@ export default function App() {
         if (!isMuted) await speakSentence(spokenError);
       }
     } finally { requestAbortRef.current = null; }
-  }, [chatHistory, isInstalled, installPrompt, isMuted, theme, stopEverything, speakSentence]);
+  }, [aiMode, chatHistory, isInstalled, installPrompt, isMuted, theme, stopEverything, speakSentence]);
 
   const startListening = useCallback(async () => {
     if (isMicMuted) return;
@@ -373,7 +519,7 @@ export default function App() {
     const recognition = new SpeechRecognition(); recognitionRef.current = recognition;
     // continuous:true + auto-restart below keeps the mic "awake" through natural pauses,
     // instead of the browser closing the session after the first thing the user says.
-    recognition.continuous = true; recognition.interimResults = true; recognition.maxAlternatives = 1; recognition.lang = "en-US";
+    recognition.continuous = true; recognition.interimResults = true; recognition.maxAlternatives = 1; recognition.lang = language;
     isListeningRef.current = true; transcriptRef.current = ""; setTranscript(""); setStatus("listening"); startAmbient();
     recognition.onstart = () => { isListeningRef.current = true; setStatus("listening"); };
     recognition.onresult = (event: any) => {
@@ -404,7 +550,7 @@ export default function App() {
       }
     };
     try { recognition.start(); } catch { setStatus("idle"); }
-  }, [handleMessage, isMicMuted, startAmbient, stopAmbient, startLiveVoice, voiceMode]);
+  }, [handleMessage, isMicMuted, startAmbient, stopAmbient, startLiveVoice, voiceMode, language]);
 
   const handleOrbTap = useCallback(() => {
     if (status === "listening" || isListeningRef.current) {
@@ -445,6 +591,24 @@ export default function App() {
     window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
   }, [submitText]);
 
+  useEffect(() => {
+    const onPopState = () => {
+      setMenuOpen(false); setSettingsOpen(false); setHistoryOpen(false); setAboutOpen(false); setInstallOpen(false); setClearHistoryConfirmOpen(false); setEndConfirmOpen(false);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  const closePanel = useCallback((setter: (value: boolean) => void) => {
+    setter(false);
+    if (window.history.state?.netoPanel) window.history.back();
+  }, []);
+
+  const openPanel = useCallback((setter: (value: boolean) => void) => {
+    window.history.pushState({ netoPanel: true }, "");
+    setter(true);
+  }, []);
+
   const statusText = status === "listening" ? "You are speaking..." : status === "thinking" ? "Neto is thinking..." : status === "speaking" ? "Neto is speaking..." : "";
   const themeData = THEMES.find(t => t.id === theme)!;
 
@@ -463,18 +627,18 @@ export default function App() {
       `}</style>
 
       <div className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between px-5 sm:px-8 pt-[max(16px,env(safe-area-inset-top))] pb-4">
-        <button aria-label="Open menu" onClick={() => setMenuOpen(true)} className="w-12 h-12 rounded-full flex items-center justify-center shadow-sm border" style={{ background:"var(--surface-solid)", borderColor:"var(--border)" }}><Menu className="w-5 h-5" /></button>
+        <button aria-label="Open menu" onClick={() => openPanel(setMenuOpen)} className="w-12 h-12 rounded-full flex items-center justify-center shadow-sm border" style={{ background:"var(--surface-solid)", borderColor:"var(--border)" }}><Menu className="w-5 h-5" /></button>
         <div className="flex items-center gap-3">
           <button aria-label={isMuted ? "Unmute AI voice" : "Mute AI voice"} onClick={() => { setIsMuted(v => !v); if (!isMuted) window.speechSynthesis?.cancel(); }} className="w-12 h-12 rounded-full shadow-sm flex items-center justify-center border" style={{ background:isMuted?"rgba(239,68,68,.12)":"var(--surface-solid)", borderColor:"var(--border)" }}>{isMuted?<VolumeX className="w-5 h-5 text-red-500"/>:<Volume2 className="w-5 h-5"/>}</button>
           <button aria-label="Toggle captions" onClick={() => setCaptionsEnabled(v => !v)} className="w-12 h-12 rounded-full flex items-center justify-center shadow-sm border" style={{ background:captionsEnabled?"var(--accent-soft)":"var(--surface-solid)", borderColor:"var(--border)" }}><span className="text-xs font-semibold">CC</span></button>
-          <button aria-label="Open settings" onClick={() => setSettingsOpen(true)} className="w-12 h-12 rounded-full flex items-center justify-center shadow-sm border" style={{ background:"var(--surface-solid)", borderColor:"var(--border)" }}><Settings className="w-5 h-5"/></button>
+          <button aria-label="Open settings" onClick={() => openPanel(setSettingsOpen)} className="w-12 h-12 rounded-full flex items-center justify-center shadow-sm border" style={{ background:"var(--surface-solid)", borderColor:"var(--border)" }}><Settings className="w-5 h-5"/></button>
         </div>
       </div>
 
       {!isInstalled && (installPrompt || manualInstallInfo) && !installDismissed && (
         <div className="absolute top-[84px] left-4 right-4 z-40 mx-auto max-w-[520px] rounded-2xl p-4 shadow-xl border backdrop-blur" style={{background:"var(--surface)",borderColor:"var(--border)"}}>
           <div className="flex items-start gap-3"><Download className="w-5 h-5 mt-0.5" style={{color:"var(--accent)"}}/><div className="flex-1"><p className="font-semibold text-sm">Install Neto</p><p className="text-xs mt-1" style={{color:"var(--muted)"}}>{manualInstallInfo && !installPrompt ? `A couple of taps on ${manualInstallInfo.platform}.` : "Install it like an app for faster access and a standalone window."}</p></div><button onClick={()=>{setInstallDismissed(true);localStorage.setItem("voice-orb-install-dismissed","1")}} aria-label="Dismiss" className="text-sm opacity-60">×</button></div>
-          <button onClick={()=>installPrompt ? installApp() : setInstallOpen(true)} className="mt-3 w-full h-10 rounded-full text-sm font-semibold text-white" style={{background:"var(--accent)"}}>{installPrompt ? "Install app" : "Show me how"}</button>
+          <button onClick={()=>installPrompt ? installApp() : openPanel(setInstallOpen)} className="mt-3 w-full h-10 rounded-full text-sm font-semibold text-white" style={{background:"var(--accent)"}}>{installPrompt ? "Install app" : "Show me how"}</button>
         </div>
       )}
 
@@ -537,44 +701,132 @@ export default function App() {
         </div>
       </div>
 
-      <Overlay open={menuOpen} onClose={()=>setMenuOpen(false)} side>
+      <Overlay open={menuOpen} onClose={()=>closePanel(setMenuOpen)} side>
         <div className="px-7 pt-[max(24px,env(safe-area-inset-top))] pb-6 border-b" style={{borderColor:"var(--border)"}}><div className="w-10 h-10 rounded-full mb-4" style={{background:"linear-gradient(180deg,var(--orb-top),var(--orb-bottom))"}}/><h2 className="text-lg font-semibold">Neto</h2><p className="text-sm mt-1" style={{color:"var(--muted)"}}>Voice-first AI assistant</p></div>
-        <nav className="p-3 flex flex-col gap-1.5"><Action icon={<Plus/>} text="New chat" onClick={()=>{setMenuOpen(false);intentionalStopRef.current=true;keepListeningRef.current=false;stopEverything();setTranscript("");setChatHistory([])}}/><Action icon={<Clock/>} text="History" onClick={()=>{setMenuOpen(false);setHistoryOpen(true)}}/><Action icon={<Settings/>} text="Settings" onClick={()=>{setMenuOpen(false);setSettingsOpen(true)}}/><Action icon={<UserRound/>} text="About creator" onClick={()=>{setMenuOpen(false);setAboutOpen(true)}}/><Action icon={<Download/>} text={isInstalled?"App installed":"Install app"} disabled={isInstalled} onClick={()=>{setMenuOpen(false);setInstallOpen(true)}}/></nav>
+        <nav className="p-3 flex flex-col gap-1.5"><Action icon={<Plus/>} text="New chat" onClick={()=>{setMenuOpen(false);intentionalStopRef.current=true;keepListeningRef.current=false;stopEverything();setTranscript("");setChatHistory([])}}/><Action icon={<Clock/>} text="History" onClick={()=>{setMenuOpen(false);openPanel(setHistoryOpen)}}/><Action icon={<Settings/>} text="Settings" onClick={()=>{setMenuOpen(false);openPanel(setSettingsOpen)}}/><Action icon={<UserRound/>} text="About creator" onClick={()=>{setMenuOpen(false);openPanel(setAboutOpen)}}/><Action icon={<Download/>} text={isInstalled?"App installed":"Install app"} disabled={isInstalled} onClick={()=>{setMenuOpen(false);openPanel(setInstallOpen)}}/></nav>
       </Overlay>
 
-      <Overlay open={settingsOpen} onClose={()=>setSettingsOpen(false)} bottom>
-        <div className="mx-auto max-w-[560px] px-6 pt-3 pb-[max(20px,env(safe-area-inset-bottom))]"><div className="flex justify-center pt-1 pb-4"><div className="w-9 h-1 rounded-full bg-black/10"/></div><div className="flex items-center justify-between mb-6"><button aria-label="Back to home" onClick={()=>setSettingsOpen(false)} className="h-10 px-3 rounded-full flex items-center gap-2 font-semibold" style={{background:"var(--accent-soft)"}}><ArrowLeft className="w-4 h-4"/>Back</button><h3 className="text-lg font-semibold">Settings</h3><button aria-label="Close settings" onClick={()=>setSettingsOpen(false)} className="w-8 h-8 rounded-full flex items-center justify-center" style={{background:"var(--accent-soft)"}}><X className="w-4 h-4"/></button></div>
+      <Overlay open={settingsOpen} onClose={()=>closePanel(setSettingsOpen)} bottom>
+        <div className="mx-auto max-w-[560px] px-6 pt-3 pb-[max(20px,env(safe-area-inset-bottom))]"><div className="flex justify-center pt-1 pb-4"><div className="w-9 h-1 rounded-full bg-black/10"/></div><div className="flex items-center justify-between mb-6"><button aria-label="Back to home" onClick={()=>closePanel(setSettingsOpen)} className="h-10 px-3 rounded-full flex items-center gap-2 font-semibold" style={{background:"var(--accent-soft)"}}><ArrowLeft className="w-4 h-4"/>Back</button><h3 className="text-lg font-semibold">Settings</h3><button aria-label="Close settings" onClick={()=>closePanel(setSettingsOpen)} className="w-8 h-8 rounded-full flex items-center justify-center" style={{background:"var(--accent-soft)"}}><X className="w-4 h-4"/></button></div>
           <div className="space-y-6">
+            <section><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>AI mode</label>
+              <div className="mt-3 grid grid-cols-2 gap-2 p-1 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}>
+                <button onClick={()=>setAiMode("normal")} className="h-11 rounded-full text-sm font-semibold" style={{background:aiMode==="normal"?"var(--text)":"transparent",color:aiMode==="normal"?"var(--bg)":"var(--text)"}}>Normal</button>
+                <button onClick={()=>setAiMode("pro")} className="h-11 rounded-full text-sm font-semibold" style={{background:aiMode==="pro"?"var(--text)":"transparent",color:aiMode==="pro"?"var(--bg)":"var(--text)"}}>Pro</button>
+              </div>
+              <p className="text-xs mt-2" style={{color:"var(--muted)"}}>Choose the response level. There are no payments or upgrades in Neto.</p>
+            </section>
+            <section><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Account</label>
+<div className="mt-3 p-4 rounded-2xl border flex items-center justify-between" style={{background:"var(--surface)",borderColor:"var(--border)"}}>
+  <div>
+    <p className="text-sm font-semibold">{currentUser ? currentUser.displayName || "Signed In" : "Not Signed In"}</p>
+    <p className="text-xs" style={{color:"var(--muted)"}}>{currentUser ? currentUser.email : "Sign in to save chat history and upload files."}</p>
+  </div>
+  <button onClick={currentUser ? logout : signInWithGoogle} className="px-4 py-2 rounded-full text-xs font-semibold border" style={{background:currentUser?"var(--surface)":"var(--text)",color:currentUser?"var(--text)":"var(--bg)",borderColor:"var(--border)"}}>
+    {currentUser ? "Sign Out" : "Sign in with Google"}
+  </button>
+</div></section>
+
+            <section>
+              <label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Input Language</label>
+              <div className="mt-3 relative">
+                <select 
+                  value={language} 
+                  onChange={(e) => {
+                    setLanguage(e.target.value);
+                    localStorage.setItem("voice-orb-lang", e.target.value);
+                  }}
+                  className="w-full h-12 px-4 rounded-xl border appearance-none text-sm font-medium outline-none focus:ring-2 focus:ring-black/5" 
+                  style={{background:"var(--surface)",borderColor:"var(--border)", color:"var(--text)"}}
+                >
+                  <option value="en-US">English (US)</option>
+                  <option value="en-GB">English (UK)</option>
+                  <option value="es-ES">Español (Spain)</option>
+                  <option value="es-MX">Español (Mexico)</option>
+                  <option value="fr-FR">Français</option>
+                  <option value="de-DE">Deutsch</option>
+                  <option value="it-IT">Italiano</option>
+                  <option value="pt-BR">Português (Brasil)</option>
+                  <option value="ja-JP">日本語 (Japanese)</option>
+                  <option value="ko-KR">한국어 (Korean)</option>
+                  <option value="zh-CN">中文 (Simplified)</option>
+                </select>
+                <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none opacity-50">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                </div>
+              </div>
+            </section>
+
             <section><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Theme</label><div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-2">{THEMES.map(t=><button key={t.id} onClick={()=>setTheme(t.id)} className="p-3 rounded-2xl border text-left" style={{background:theme===t.id?"var(--accent-soft)":"var(--surface)",borderColor:theme===t.id?"var(--accent)":"var(--border)"}}><span className="text-sm font-semibold">{t.label}</span><span className="block text-[11px] mt-1" style={{color:"var(--muted)"}}>{t.description}</span></button>)}</div></section>
             <section><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Voice</label><div className="mt-3 grid grid-cols-3 gap-2">{["Sky","Cove","Breeze"].map(v=><button key={v} onClick={()=>setVoice(v)} className="h-12 rounded-full border text-sm font-semibold" style={{background:voice===v?"var(--text)":"var(--surface)",color:voice===v?"var(--bg)":"var(--text)",borderColor:"var(--border)"}}>{v}</button>)}</div></section>
-            <section><div className="flex items-center justify-between h-14 px-4 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><div><p className="text-sm font-semibold">Captions</p><p className="text-xs" style={{color:"var(--muted)"}}>Show spoken input and Neto replies above the orb</p></div><button aria-label="Toggle captions" onClick={()=>setCaptionsEnabled(v=>!v)} className="relative w-12 h-7 rounded-full" style={{background:captionsEnabled?"var(--accent)":"var(--border)"}}><span className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all" style={{left:captionsEnabled?25:3}}/></button></div></section><section><div className="flex items-center justify-between h-14 px-4 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><div><p className="text-sm font-semibold">Live voice</p><p className="text-xs" style={{color:"var(--muted)"}}>Gemini native audio-to-audio conversation</p></div><button aria-label="Toggle live voice" onClick={()=>{setVoiceMode(v=>!v); if (voiceMode) { intentionalStopRef.current=true; keepListeningRef.current=false; disconnectLive(); }}} className="relative w-12 h-7 rounded-full" style={{background:voiceMode?"var(--accent)":"var(--border)"}}><span className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all" style={{left:voiceMode?25:3}}/></button></div></section><section><div className="flex items-center justify-between"><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Speed</label><span className="text-xs font-medium px-2.5 py-1 rounded-full" style={{background:"var(--accent-soft)"}}>{speed.toFixed(1)}×</span></div><input aria-label="Voice speed" className="mt-4 w-full" type="range" min="0.7" max="1.4" step="0.1" value={speed} onChange={e=>setSpeed(parseFloat(e.target.value))}/></section>
+            <section><div className="flex items-center justify-between h-14 px-4 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><div><p className="text-sm font-semibold">Captions</p><p className="text-xs" style={{color:"var(--muted)"}}>Show spoken input and Neto replies above the orb</p></div><button aria-label="Toggle captions" onClick={()=>setCaptionsEnabled(v=>!v)} className="relative w-12 h-7 rounded-full" style={{background:captionsEnabled?"var(--accent)":"var(--border)"}}><span className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all" style={{left:captionsEnabled?25:3}}/></button></div></section><section><div className="flex items-center justify-between h-14 px-4 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><div><p className="text-sm font-semibold">Live voice</p><p className="text-xs" style={{color:"var(--muted)"}}>Instant voice conversation</p></div><button aria-label="Toggle live voice" onClick={()=>{setVoiceMode(v=>!v); if (voiceMode) { intentionalStopRef.current=true; keepListeningRef.current=false; disconnectLive(); }}} className="relative w-12 h-7 rounded-full" style={{background:voiceMode?"var(--accent)":"var(--border)"}}><span className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all" style={{left:voiceMode?25:3}}/></button></div></section><section><div className="flex items-center justify-between"><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Speed</label><span className="text-xs font-medium px-2.5 py-1 rounded-full" style={{background:"var(--accent-soft)"}}>{speed.toFixed(1)}×</span></div><input aria-label="Voice speed" className="mt-4 w-full" type="range" min="0.7" max="1.4" step="0.1" value={speed} onChange={e=>setSpeed(parseFloat(e.target.value))}/></section>
             <div className="flex items-center justify-between h-14 px-4 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><div><p className="text-sm font-semibold">Background sounds</p><p className="text-xs" style={{color:"var(--muted)"}}>Soft ambient hum while listening</p></div><button aria-label="Toggle background sounds" onClick={()=>setAmbientSounds(v=>!v)} className="relative w-12 h-7 rounded-full" style={{background:ambientSounds?"var(--accent)":"var(--border)"}}><span className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all" style={{left:ambientSounds?25:3}}/></button></div>
-            <button onClick={()=>setInstallOpen(true)} className="w-full h-12 rounded-full text-sm font-semibold border" style={{background:"var(--accent-soft)",borderColor:"var(--accent)"}}>{isInstalled?"Neto is installed":"Install Neto"}</button>
+            <button onClick={()=>openPanel(setInstallOpen)} className="w-full h-12 rounded-full text-sm font-semibold border" style={{background:"var(--accent-soft)",borderColor:"var(--accent)"}}>{isInstalled?"Neto is installed":"Install Neto"}</button>
           </div>
         </div>
       </Overlay>
 
-      <Overlay open={historyOpen} onClose={()=>setHistoryOpen(false)} bottom>
-        <div className="mx-auto max-w-[560px] px-6 pt-3 pb-6" style={{maxHeight:"80vh",overflowY:"auto"}}><div className="flex justify-center pb-4"><div className="w-9 h-1 rounded-full bg-black/10"/></div><div className="flex items-center justify-between mb-4"><h3 className="text-lg font-semibold">Conversation</h3><button onClick={()=>setHistoryOpen(false)} className="w-8 h-8 rounded-full flex items-center justify-center" style={{background:"var(--accent-soft)"}}><X className="w-4 h-4"/></button></div>{chatHistory.length===0?<p className="text-sm text-center py-12" style={{color:"var(--muted)"}}>No messages yet.</p>:<div className="space-y-4">{chatHistory.map((m,i)=><div key={i} className={`flex ${m.role==="user"?"justify-end":"justify-start"}`}><div className="max-w-[85%] rounded-2xl px-4 py-2.5 text-[15px]" style={{background:m.role==="user"?"var(--accent)":"var(--accent-soft)",color:m.role==="user"?"#fff":"var(--text)"}}>{m.parts[0].text}</div></div>)}</div>}</div>
+      <Overlay open={historyOpen} onClose={()=>closePanel(setHistoryOpen)} bottom>
+        <div className="mx-auto max-w-[560px] px-6 pt-3 pb-6" style={{maxHeight:"80vh",overflowY:"auto"}}><div className="flex justify-center pb-4"><div className="w-9 h-1 rounded-full bg-black/10"/></div><div className="flex items-center justify-between mb-4">
+  <div className="flex items-center gap-2"><button aria-label="Back to home" onClick={()=>closePanel(setHistoryOpen)} className="w-8 h-8 rounded-full flex items-center justify-center" style={{background:"var(--accent-soft)"}}><ArrowLeft className="w-4 h-4"/></button><h3 className="text-lg font-semibold">Conversation</h3></div>
+  <div className="flex gap-2">
+    {chatHistory.length > 0 && (
+      <>
+        <button onClick={() => exportConversation('txt')} title="Export as TXT" className="h-8 px-3 rounded-full flex items-center justify-center text-xs font-semibold border" style={{background:"var(--surface)", borderColor:"var(--border)"}}>
+          TXT
+        </button>
+        <button onClick={() => exportConversation('json')} title="Export as JSON" className="h-8 px-3 rounded-full flex items-center justify-center text-xs font-semibold border" style={{background:"var(--surface)", borderColor:"var(--border)"}}>
+          JSON
+        </button>
+      </>
+    )}
+    {chatHistory.length > 0 && currentUser && (
+      <button onClick={() => setClearHistoryConfirmOpen(true)} className="w-8 h-8 rounded-full flex items-center justify-center text-red-500" style={{background:"var(--accent-soft)"}}>
+        <Trash2 className="w-4 h-4"/>
+      </button>
+    )}
+    <button onClick={()=>closePanel(setHistoryOpen)} className="w-8 h-8 rounded-full flex items-center justify-center" style={{background:"var(--accent-soft)"}}><X className="w-4 h-4"/></button>
+  </div>
+</div>{chatHistory.length===0?<p className="text-sm text-center py-12" style={{color:"var(--muted)"}}>No messages yet.</p>:<div className="space-y-4">{chatHistory.map((m,i)=><div key={i} className={`flex ${m.role==="user"?"justify-end":"justify-start"}`}><div className="max-w-[85%] rounded-2xl px-4 py-2.5 text-[15px]" style={{background:m.role==="user"?"var(--accent)":"var(--accent-soft)",color:m.role==="user"?"#fff":"var(--text)"}}>{m.parts[0].text}</div></div>)}</div>}</div>
       </Overlay>
 
-      <Overlay open={aboutOpen} onClose={()=>setAboutOpen(false)} bottom>
-        <div className="mx-auto max-w-[560px] px-6 pt-3 pb-[max(20px,env(safe-area-inset-bottom))]"><div className="flex justify-center pb-4"><div className="w-9 h-1 rounded-full bg-black/10"/></div><div className="flex items-center gap-3"><div className="w-12 h-12 rounded-2xl flex items-center justify-center" style={{background:"linear-gradient(180deg,var(--orb-top),var(--orb-bottom))"}}><UserRound className="w-6 h-6"/></div><div><h3 className="text-lg font-semibold">About Neto</h3><p className="text-sm" style={{color:"var(--muted)"}}>Created by {CREATOR.name}</p></div></div><div className="mt-6 rounded-2xl p-4 border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><p className="text-sm leading-relaxed">Neto is the AI assistant and product identity of the app. The company/product identity is <strong>Neto</strong>, and the verified creator is <strong>{CREATOR.name}</strong>. Neto should describe itself using these verified facts and should never claim that it was created by OpenAI, Gemini, or another unrelated organization.</p></div></div>
+      <Overlay open={clearHistoryConfirmOpen} onClose={()=>setClearHistoryConfirmOpen(false)} bottom>
+        <div className="mx-auto max-w-[560px] px-6 pt-3 pb-[max(20px,env(safe-area-inset-bottom))] text-center">
+          <div className="flex justify-center pb-4"><div className="w-9 h-1 rounded-full bg-black/10"/></div>
+          <div className="mx-auto w-14 h-14 rounded-full flex items-center justify-center border" style={{background:"rgba(239,68,68,.12)",borderColor:"var(--border)"}}>
+            <Trash2 className="w-6 h-6 text-red-500"/>
+          </div>
+          <h3 className="text-lg font-semibold mt-4">Clear all history?</h3>
+          <p className="text-sm mt-2" style={{color:"var(--muted)"}}>This will permanently delete all your saved conversations. This action cannot be undone.</p>
+          <div className="grid grid-cols-2 gap-2 mt-6">
+            <button onClick={()=>setClearHistoryConfirmOpen(false)} className="h-12 rounded-full border font-semibold" style={{borderColor:"var(--border)",background:"var(--surface)"}}>Cancel</button>
+            <button onClick={async () => {
+              await clearAllConversations();
+              setChatHistory([]);
+              setClearHistoryConfirmOpen(false);
+              setHistoryOpen(false);
+            }} className="h-12 rounded-full text-white font-semibold bg-red-500">Delete all</button>
+          </div>
+        </div>
+      </Overlay>
+
+      <Overlay open={aboutOpen} onClose={()=>closePanel(setAboutOpen)} bottom>
+        <div className="mx-auto max-w-[560px] px-6 pt-3 pb-[max(20px,env(safe-area-inset-bottom))]"><div className="flex justify-center pb-4"><div className="w-9 h-1 rounded-full bg-black/10"/></div><div className="flex items-center gap-3"><button aria-label="Back to home" onClick={()=>closePanel(setAboutOpen)} className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{background:"var(--accent-soft)"}}><ArrowLeft className="w-4 h-4"/></button><div className="w-12 h-12 rounded-2xl flex items-center justify-center" style={{background:"linear-gradient(180deg,var(--orb-top),var(--orb-bottom))"}}><UserRound className="w-6 h-6"/></div><div><h3 className="text-lg font-semibold">About Neto</h3><p className="text-sm" style={{color:"var(--muted)"}}>Created by {CREATOR.name}</p></div></div><div className="mt-6 rounded-2xl p-4 border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><p className="text-sm leading-relaxed">Neto is the AI assistant and product identity of the app. The company/product identity is <strong>Neto</strong>, and the verified creator is <strong>{CREATOR.name}</strong>. Neto should describe itself using these verified facts and should not invent a different creator or product identity.</p></div></div>
       </Overlay>
 
       <Overlay open={endConfirmOpen} onClose={()=>setEndConfirmOpen(false)} bottom>
-        <div className="mx-auto max-w-[560px] px-6 pt-3 pb-[max(20px,env(safe-area-inset-bottom))] text-center"><div className="flex justify-center pb-4"><div className="w-9 h-1 rounded-full bg-black/10"/></div><div className="mx-auto w-14 h-14 rounded-full flex items-center justify-center border" style={{background:"var(--accent-soft)",borderColor:"var(--border)"}}><X className="w-6 h-6"/></div><h3 className="text-lg font-semibold mt-4">End conversation?</h3><p className="text-sm mt-2" style={{color:"var(--muted)"}}>Neto will stop speaking, close the microphone session, cancel pending work, and return the orb to idle.</p><div className="grid grid-cols-2 gap-2 mt-6"><button onClick={()=>setEndConfirmOpen(false)} className="h-12 rounded-full border font-semibold" style={{borderColor:"var(--border)",background:"var(--surface)"}}>Keep talking</button><button onClick={()=>{stopEverything();setDraftText("");setTranscript("");transcriptRef.current="";setEndConfirmOpen(false)}} className="h-12 rounded-full text-white font-semibold" style={{background:"var(--text)"}}>End conversation</button></div></div>
+        <div className="mx-auto max-w-[560px] px-6 pt-3 pb-[max(20px,env(safe-area-inset-bottom))] text-center"><div className="flex justify-center pb-4"><div className="w-9 h-1 rounded-full bg-black/10"/></div><div className="mx-auto w-14 h-14 rounded-full flex items-center justify-center border" style={{background:"var(--accent-soft)",borderColor:"var(--border)"}}><X className="w-6 h-6"/></div><h3 className="text-lg font-semibold mt-4">End conversation?</h3><p className="text-sm mt-2" style={{color:"var(--muted)"}}>Neto will stop speaking, close the microphone session, cancel pending work, and return the orb to idle.</p><div className="grid grid-cols-2 gap-2 mt-6"><button onClick={()=>setEndConfirmOpen(false)} className="h-12 rounded-full border font-semibold" style={{borderColor:"var(--border)",background:"var(--surface)"}}>Keep talking</button><button onClick={endAndSaveConversation} className="h-12 rounded-full text-white font-semibold" style={{background:"var(--text)"}}>End conversation</button></div></div>
       </Overlay>
 
-      <Overlay open={installOpen} onClose={()=>setInstallOpen(false)} bottom>
-        <div className="mx-auto max-w-[560px] px-6 pt-3 pb-[max(20px,env(safe-area-inset-bottom))]"><div className="flex justify-center pb-4"><div className="w-9 h-1 rounded-full bg-black/10"/></div><div className="flex items-center gap-3"><Download className="w-6 h-6" style={{color:"var(--accent)"}}/><div><h3 className="text-lg font-semibold">Install Neto</h3><p className="text-sm" style={{color:"var(--muted)"}}>{isInstalled?"The app is already installed on this device.":manualInstallInfo?`${manualInstallInfo.platform} doesn't support one-tap install — add it manually:`:installPrompt?"Install Neto as a standalone app.":"Your browser will show its supported installation option when available."}</p></div></div>
+      <Overlay open={installOpen} onClose={()=>closePanel(setInstallOpen)} bottom>
+        <div className="mx-auto max-w-[560px] px-6 pt-3 pb-[max(20px,env(safe-area-inset-bottom))]"><div className="flex justify-center pb-4"><div className="w-9 h-1 rounded-full bg-black/10"/></div><div className="flex items-center gap-3"><button aria-label="Back to home" onClick={()=>closePanel(setInstallOpen)} className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{background:"var(--accent-soft)"}}><ArrowLeft className="w-4 h-4"/></button><Download className="w-6 h-6" style={{color:"var(--accent)"}}/><div><h3 className="text-lg font-semibold">Install Neto</h3><p className="text-sm" style={{color:"var(--muted)"}}>{isInstalled?"The app is already installed on this device.":manualInstallInfo?`${manualInstallInfo.platform} doesn't support one-tap install — add it manually:`:installPrompt?"Install Neto as a standalone app.":"Your browser will show its supported installation option when available."}</p></div></div>
         {!isInstalled && manualInstallInfo && (
           <ol className="mt-4 space-y-2 text-sm list-decimal list-inside" style={{color:"var(--text)"}}>
             {manualInstallInfo.steps.map((step, i) => <li key={i}>{step}</li>)}
           </ol>
         )}
         {!isInstalled && !manualInstallInfo && <button disabled={!installPrompt} onClick={installApp} className="mt-6 w-full h-12 rounded-full text-white font-semibold disabled:opacity-40" style={{background:"var(--accent)"}}>{installPrompt?"Install now":"Use your browser's Install / Add to Home Screen option"}</button>}
-        <button onClick={()=>setInstallOpen(false)} className="mt-2 w-full h-11 rounded-full text-sm" style={{color:"var(--muted)"}}>Close</button></div>
+        <button onClick={()=>closePanel(setInstallOpen)} className="mt-2 w-full h-11 rounded-full text-sm" style={{color:"var(--muted)"}}>Close</button></div>
       </Overlay>
     </div>
   );

@@ -75,35 +75,179 @@ async function startServer() {
 
   const wss = new WebSocketServer({ server: httpServer, path: "/live" });
 
+  const NETO_VOICE_INSTRUCTIONS = `You are Neto, the AI assistant inside the Neto app. You were created for Neto by Macdonald Barasa. Your product/company identity is Neto. Do not expose the underlying AI provider unless the user explicitly asks about the technical stack. Give brief, immediate conversational replies, normally 1-2 short sentences unless the user asks for detail. Never use markdown in voice replies. Be natural, clear, friendly, and fast.`;
+
+  function resamplePcm16Base64(base64: string, fromRate: number, toRate: number) {
+    if (fromRate === toRate) return base64;
+    const input = Buffer.from(base64, "base64");
+    const samples = new Int16Array(input.buffer, input.byteOffset, Math.floor(input.byteLength / 2));
+    const outLength = Math.max(1, Math.floor(samples.length * toRate / fromRate));
+    const out = new Int16Array(outLength);
+    const ratio = fromRate / toRate;
+    for (let i = 0; i < outLength; i++) {
+      const pos = i * ratio;
+      const left = Math.floor(pos);
+      const right = Math.min(samples.length - 1, left + 1);
+      const frac = pos - left;
+      const value = samples[Math.min(left, samples.length - 1)] * (1 - frac) + samples[right] * frac;
+      out[i] = Math.max(-32768, Math.min(32767, Math.round(value)));
+    }
+    return Buffer.from(out.buffer).toString("base64");
+  }
+
   wss.on("connection", async (clientWs, req) => {
-    try {
-      if (!ai) {
-        clientWs.send(JSON.stringify({ error: "Gemini API is not configured" }));
+    const mode = new URL(req.url || "/live", "http://localhost").searchParams.get("mode") === "pro" ? "pro" : "normal";
+
+    if (mode === "pro") {
+      if (!process.env.OPENAI_API_KEY) {
+        clientWs.send(JSON.stringify({ error: "Pro voice is not configured yet." }));
         clientWs.close();
         return;
       }
-      
+
+      let upstream: any;
+      try {
+        const WebSocket = (await import("ws")).default;
+        const model = process.env.OPENAI_PRO_REALTIME_MODEL || "gpt-realtime-2.1";
+        upstream = new WebSocket(`wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`, {
+          headers: {
+            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+            "OpenAI-Beta": "realtime=v1",
+          },
+        });
+
+        upstream.on("open", () => {
+          upstream.send(JSON.stringify({
+            type: "session.update",
+            session: {
+              type: "realtime",
+              output_modalities: ["audio"],
+              instructions: NETO_VOICE_INSTRUCTIONS,
+              audio: {
+                input: {
+                  format: { type: "audio/pcm", rate: 24000 },
+                  noise_reduction: { type: "near_field" },
+                  transcription: { model: "gpt-4o-mini-transcribe" },
+                  turn_detection: { type: "server_vad", threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 450, create_response: true },
+                },
+                output: { format: { type: "audio/pcm", rate: 24000 }, voice: process.env.OPENAI_PRO_VOICE || "marin" },
+              },
+            },
+          }));
+          clientWs.send(JSON.stringify({ ready: true }));
+        });
+
+        upstream.on("message", (raw: Buffer) => {
+          try {
+            const event = JSON.parse(raw.toString());
+            switch (event.type) {
+              case "response.output_audio.delta":
+                if (event.delta) clientWs.send(JSON.stringify({ audio: event.delta }));
+                break;
+              case "conversation.item.input_audio_transcription.delta":
+                if (event.delta) clientWs.send(JSON.stringify({ inputTranscription: event.delta }));
+                break;
+              case "conversation.item.input_audio_transcription.completed":
+                if (event.transcript) clientWs.send(JSON.stringify({ inputTranscription: event.transcript, inputTranscriptionFinal: true }));
+                break;
+              case "response.output_audio_transcript.delta":
+                if (event.delta) clientWs.send(JSON.stringify({ outputTranscription: event.delta }));
+                break;
+              case "response.output_audio_transcript.done":
+                if (event.transcript) clientWs.send(JSON.stringify({ outputTranscription: event.transcript, outputTranscriptionFinal: true }));
+                break;
+              case "input_audio_buffer.speech_started":
+                clientWs.send(JSON.stringify({ listening: true }));
+                break;
+              case "input_audio_buffer.speech_stopped":
+                clientWs.send(JSON.stringify({ thinking: true }));
+                break;
+              case "input_audio_buffer.cleared":
+                break;
+              case "response.created":
+                clientWs.send(JSON.stringify({ thinking: true }));
+                break;
+              case "response.done":
+                clientWs.send(JSON.stringify({ turnComplete: true }));
+                break;
+              case "response.cancelled":
+              case "input_audio_buffer.committed":
+                break;
+              case "conversation.item.truncated":
+                clientWs.send(JSON.stringify({ interrupted: true }));
+                break;
+              case "error":
+                console.error("Pro realtime error:", event.error || event);
+                clientWs.send(JSON.stringify({ error: "Pro voice is temporarily unavailable." }));
+                break;
+            }
+          } catch (error) {
+            console.error("Error processing Pro realtime event", error);
+          }
+        });
+
+        upstream.on("error", (error: any) => {
+          console.error("Pro realtime websocket error", error);
+          try { clientWs.send(JSON.stringify({ error: "Pro voice connection failed." })); } catch {}
+        });
+
+        upstream.on("close", () => {
+          try { if (clientWs.readyState === 1) clientWs.close(); } catch {}
+        });
+
+        clientWs.on("message", (data) => {
+          try {
+            const { audio, cancel } = JSON.parse(data.toString());
+            if (cancel && upstream?.readyState === 1) {
+              upstream.send(JSON.stringify({ type: "response.cancel" }));
+              upstream.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
+              return;
+            }
+            if (audio && upstream?.readyState === 1) {
+              const pcm24 = resamplePcm16Base64(audio, 16000, 24000);
+              upstream.send(JSON.stringify({ type: "input_audio_buffer.append", audio: pcm24 }));
+            }
+          } catch (error) {
+            console.error("Error forwarding Pro voice input", error);
+          }
+        });
+
+        clientWs.on("close", () => {
+          try { if (upstream?.readyState === 1) upstream.close(); } catch {}
+        });
+      } catch (error) {
+        console.error("Failed to connect to Pro realtime API", error);
+        try { clientWs.send(JSON.stringify({ error: "Pro voice is unavailable right now." })); } catch {}
+        try { clientWs.close(); } catch {}
+      }
+      return;
+    }
+
+    try {
+      if (!ai) {
+        clientWs.send(JSON.stringify({ error: "Normal voice is not configured." }));
+        clientWs.close();
+        return;
+      }
+
       const session = await ai.live.connect({
         model: "gemini-3.1-flash-live-preview",
         config: {
           responseModalities: ["AUDIO"],
-          systemInstruction: `You are Neto, the AI assistant inside the Neto app. You were created for Neto by Macdonald Barasa. Your product/company identity is Neto. Do not claim OpenAI created you. Give brief, immediate conversational replies, normally 1-2 short sentences unless the user asks for detail. Never use markdown in voice replies. Be natural, friendly, and fast.`,
+          systemInstruction: NETO_VOICE_INSTRUCTIONS,
           inputAudioTranscription: {},
           outputAudioTranscription: {},
+          thinkingConfig: { thinkingLevel: "minimal" },
         },
         callbacks: {
           onmessage: (message: any) => {
             const content = message.serverContent;
             const audio = content?.modelTurn?.parts?.[0]?.inlineData?.data;
             if (audio) clientWs.send(JSON.stringify({ audio }));
-            if (content?.interrupted)
-              clientWs.send(JSON.stringify({ interrupted: true }));
-            if (content?.inputTranscription?.text)
-              clientWs.send(JSON.stringify({ inputTranscription: content.inputTranscription.text }));
-            if (content?.outputTranscription?.text)
-              clientWs.send(JSON.stringify({ outputTranscription: content.outputTranscription.text }));
-            if (content?.turnComplete)
-              clientWs.send(JSON.stringify({ turnComplete: true }));
+            if (content?.interrupted) clientWs.send(JSON.stringify({ interrupted: true }));
+            if (content?.inputTranscription?.text) clientWs.send(JSON.stringify({ inputTranscription: content.inputTranscription.text }));
+            if (content?.outputTranscription?.text) clientWs.send(JSON.stringify({ outputTranscription: content.outputTranscription.text }));
+            if (content?.turnComplete) clientWs.send(JSON.stringify({ turnComplete: true }));
           },
         },
       });
@@ -111,41 +255,111 @@ async function startServer() {
       clientWs.on("message", (data) => {
         try {
           const { audio } = JSON.parse(data.toString());
-          if (audio) {
-            session.sendRealtimeInput({
-              audio: { data: audio, mimeType: "audio/pcm;rate=16000" },
-            });
-          }
+          if (audio) session.sendRealtimeInput({ audio: { data: audio, mimeType: "audio/pcm;rate=16000" } as any });
         } catch (e) {
-          console.error("Error processing websocket message", e);
+          console.error("Error processing normal voice websocket message", e);
         }
       });
-      
-      clientWs.on("close", () => {
-        // cleanup session if possible
-      });
+      clientWs.on("close", () => {});
     } catch (e: any) {
-      console.error("Failed to connect to Live API", e);
-      try {
-        const isRateLimit = e?.status === 429 || (e?.message && e.message.includes("429"));
-        const errorMsg = isRateLimit 
-          ? "Sorry, you have reached the limit. Please try again later."
-          : "Sorry, my voice systems are overloaded. Please try again in a moment.";
-        clientWs.send(JSON.stringify({ 
-          outputTranscription: errorMsg,
-          turnComplete: true
-        }));
-      } catch (err) {}
-      setTimeout(() => clientWs.close(), 500);
+      console.error("Failed to connect to Normal Live API", e);
+      try { clientWs.send(JSON.stringify({ error: "Normal voice is unavailable right now." })); } catch {}
+      setTimeout(() => { try { clientWs.close(); } catch {} }, 500);
     }
   });
 
-  // Chat API stream route integrating Gemini & Firestore
+  // Chat API stream route. Normal uses Gemini. Pro uses OpenAI.
   app.post("/api/chat-stream", async (req, res) => {
     try {
-      if (!ai) return res.status(503).json({ error: "Gemini API is not configured" });
+      const { message, history = [], sessionId = "default-session", clientContext = {}, attachment = null, mode = "normal" } = req.body;
 
-      const { message, history = [], sessionId = "default-session", clientContext = {}, attachment = null } = req.body;
+      if (mode === "pro") {
+        if (!process.env.OPENAI_API_KEY) return res.status(503).json({ error: "Pro is not configured yet." });
+        const safeHistory = Array.isArray(history) ? history.slice(-20) : [];
+        const openAiMessages: any[] = [
+          {
+            role: "developer",
+            content: `You are Neto, the AI assistant inside the Neto app. The product identity is Neto and the verified creator is Macdonald Barasa. Do not expose the underlying AI provider unless the user explicitly asks about the technical stack. Be concise by default, direct, natural, and helpful. Client context: ${JSON.stringify(clientContext)}`
+          },
+          ...safeHistory.map((item: any) => ({
+            role: item?.role === "model" ? "assistant" : "user",
+            content: Array.isArray(item?.parts) ? item.parts.map((part: any) => part?.text || "").join("\n") : String(item?.content || "")
+          })).filter((item: any) => item.content)
+        ];
+
+        const userText = message || (attachment?.mimeType?.startsWith("image/") ? "Please analyze the attached image." : "Please analyze the attached file.");
+        const userContent: any[] = [{ type: "text", text: userText }];
+        if (attachment?.text) userContent.push({ type: "text", text: `Attached file ${attachment.name || "file"} contains:\n${String(attachment.text).slice(0, 12000)}` });
+
+        if (attachment?.url && attachment?.mimeType) {
+          const allowedHosts = new Set(["firebasestorage.googleapis.com", "storage.googleapis.com"]);
+          const parsedUrl = new URL(attachment.url);
+          if (!allowedHosts.has(parsedUrl.hostname)) return res.status(400).json({ error: "Attachment URL is not supported." });
+          if (Number(attachment.size || 0) > 10 * 1024 * 1024) return res.status(413).json({ error: "Files must be 10 MB or smaller." });
+          const fileResponse = await fetch(attachment.url);
+          if (!fileResponse.ok) throw new Error("Could not read the uploaded file.");
+          const buffer = Buffer.from(await fileResponse.arrayBuffer());
+          const mimeType = String(attachment.mimeType).split(";")[0].toLowerCase();
+          if (/^image\/(png|jpeg|jpg|webp|gif)$/.test(mimeType)) {
+            const normalized = mimeType === "image/jpg" ? "image/jpeg" : mimeType;
+            userContent.push({ type: "image_url", image_url: { url: `data:${normalized};base64,${buffer.toString("base64")}` } });
+          } else if (!attachment.text) {
+            userContent.push({ type: "text", text: `The uploaded file ${attachment.name || "attachment"} is stored in the app. Its MIME type is ${mimeType}.` });
+          }
+        }
+        openAiMessages.push({ role: "user", content: userContent });
+
+        const openAiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+          body: JSON.stringify({ model: process.env.OPENAI_PRO_MODEL || "gpt-5.6", messages: openAiMessages, stream: true })
+        });
+        if (!openAiResponse.ok) {
+          const detail = await openAiResponse.text();
+          console.error("Pro API error:", detail);
+          const status = openAiResponse.status === 429 ? 429 : 502;
+          return res.status(status).json({ error: status === 429 ? "Pro is temporarily unavailable. Please try again later." : "Pro is unavailable right now." });
+        }
+
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.setHeader("Transfer-Encoding", "chunked");
+        let fullText = "";
+        const reader = openAiResponse.body?.getReader();
+        const decoder = new TextDecoder();
+        let pending = "";
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            pending += decoder.decode(value, { stream: true });
+            const lines = pending.split("\n");
+            pending = lines.pop() || "";
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              const payload = line.slice(6).trim();
+              if (payload === "[DONE]") continue;
+              try {
+                const delta = JSON.parse(payload)?.choices?.[0]?.delta?.content;
+                if (delta) { fullText += delta; res.write(delta); }
+              } catch {}
+            }
+          }
+        }
+        res.end();
+
+        if (getApps().length) {
+          try {
+            const db = getFirestore();
+            const sessionRef = db.collection("conversations").doc(String(sessionId).slice(0, 100));
+            const attachmentMeta = attachment ? { name: attachment.name, mimeType: attachment.mimeType, storagePath: attachment.storagePath, size: attachment.size } : null;
+            await sessionRef.collection("messages").add({ role: "user", text: message, attachment: attachmentMeta, timestamp: FieldValue.serverTimestamp(), mode: "pro" });
+            await sessionRef.collection("messages").add({ role: "model", text: fullText, timestamp: FieldValue.serverTimestamp(), mode: "pro" });
+          } catch (dbError) { console.error("Failed to save Pro conversation:", dbError); }
+        }
+        return;
+      }
+
+      if (!ai) return res.status(503).json({ error: "Normal service is not configured" });
       const safeHistory = Array.isArray(history) ? history.slice(-20) : [];
       const userParts: any[] = [{ text: message || (attachment?.mimeType?.startsWith("image/") ? "Please analyze the attached image." : "Please analyze the attached file.") }];
 
@@ -182,7 +396,7 @@ async function startServer() {
       res.setHeader("Transfer-Encoding", "chunked");
 
       const responseStream = await ai.models.generateContentStream({
-        model: "gemini-1.5-flash",
+        model: "gemini-3.7-flash",
         contents,
         config: {
           systemInstruction: `You are Neto, the AI assistant inside the Neto app.
@@ -191,7 +405,7 @@ Identity rules:
 - The product/company identity is Neto.
 - The verified creator is Macdonald Barasa.
 - Do not claim you were created by OpenAI. OpenAI is not your creator identity for this app.
-- Gemini is only the underlying AI technology used by the application when relevant; it is not your name or creator.
+- The AI service is an internal implementation detail. Do not expose provider names unless the user explicitly asks about the technical stack.
 - If asked who created you or the app, answer: "I was created for Neto by Macdonald Barasa."
 - Do not invent biography, location, contact details, social links, achievements, ownership, or company history for Macdonald Barasa.
 - Be honest about capabilities. You can analyze text, images, and supported PDF attachments supplied by the app.
