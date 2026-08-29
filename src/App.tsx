@@ -3,7 +3,7 @@
  * Creator: Macdonald Barasa
  */
 import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
-import { Menu, Settings, Plus, Clock, Mic, MicOff, X, Send, Volume2, VolumeX, Download, UserRound, ArrowLeft, ImagePlus, Trash2 } from "lucide-react";
+import { Menu, Settings, Plus, Clock, Mic, MicOff, X, Send, Volume2, VolumeX, Download, UserRound, ArrowLeft, ImagePlus, Trash2, Search } from "lucide-react";
 import { uploadAttachment, signInWithGoogle, logout, onAuthChange, saveConversation, loadRecentConversations, clearAllConversations } from "./lib/firebase";
 
 type Status = "idle" | "listening" | "thinking" | "speaking";
@@ -65,7 +65,14 @@ export default function App() {
   const [liveConnected, setLiveConnected] = useState(false);
   const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem("voice-orb-theme") as Theme) || "light");
   const [chatHistory, setChatHistory] = useState<Message[]>([]);
+  const [historySearchQuery, setHistorySearchQuery] = useState("");
   const [currentUser, setCurrentUser] = useState<any>(null);
+
+  const filteredChatHistory = useMemo(() => {
+    if (!historySearchQuery.trim()) return chatHistory;
+    const q = historySearchQuery.toLowerCase().trim();
+    return chatHistory.filter(m => m.parts.some(p => p.text?.toLowerCase().includes(q)));
+  }, [chatHistory, historySearchQuery]);
 
   useEffect(() => {
     const unsubscribe = onAuthChange((user) => {
@@ -725,10 +732,12 @@ export default function App() {
           <div className="space-y-6">
             <section><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>AI mode</label>
               <div className="mt-3 grid grid-cols-2 gap-2 p-1 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}>
-                <button onClick={()=>setAiMode("normal")} className="h-11 rounded-full text-sm font-semibold" style={{background:aiMode==="normal"?"var(--text)":"transparent",color:aiMode==="normal"?"var(--bg)":"var(--text)"}}>Normal</button>
-                <button onClick={()=>setAiMode("pro")} className="h-11 rounded-full text-sm font-semibold" style={{background:aiMode==="pro"?"var(--text)":"transparent",color:aiMode==="pro"?"var(--bg)":"var(--text)"}}>Pro</button>
+                <button onClick={()=>{setAiMode("normal");localStorage.setItem("neto-ai-mode","normal")}} className="h-11 rounded-full text-sm font-semibold transition-colors" style={{background:aiMode==="normal"?"var(--text)":"transparent",color:aiMode==="normal"?"var(--bg)":"var(--text)"}}>Normal (Gemini)</button>
+                <button onClick={()=>{setAiMode("pro");localStorage.setItem("neto-ai-mode","pro")}} className="h-11 rounded-full text-sm font-semibold transition-colors" style={{background:aiMode==="pro"?"var(--text)":"transparent",color:aiMode==="pro"?"var(--bg)":"var(--text)"}}>Pro (OpenAI)</button>
               </div>
-              <p className="text-xs mt-2" style={{color:"var(--muted)"}}>Choose the response level. There are no payments or upgrades in Neto.</p>
+              <p className="text-xs mt-2" style={{color:"var(--muted)"}}>
+                {aiMode === "normal" ? "Normal mode runs on Google Gemini (fast, multi-modal & voice streaming)." : "Pro mode runs on OpenAI (advanced reasoning & high-tier models)."}
+              </p>
             </section>
             <section><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Account</label>
 <div className="mt-3 p-4 rounded-2xl border flex items-center justify-between" style={{background:"var(--surface)",borderColor:"var(--border)"}}>
@@ -801,7 +810,64 @@ export default function App() {
     )}
     <button onClick={()=>closePanel(setHistoryOpen)} className="w-8 h-8 rounded-full flex items-center justify-center" style={{background:"var(--accent-soft)"}}><X className="w-4 h-4"/></button>
   </div>
-</div>{chatHistory.length===0?<p className="text-sm text-center py-12" style={{color:"var(--muted)"}}>No messages yet.</p>:<div className="space-y-4">{chatHistory.map((m,i)=><div key={i} className={`flex ${m.role==="user"?"justify-end":"justify-start"}`}><div className="max-w-[85%] rounded-2xl px-4 py-2.5 text-[15px]" style={{background:m.role==="user"?"var(--accent)":"var(--accent-soft)",color:m.role==="user"?"#fff":"var(--text)"}}>{m.parts[0].text}</div></div>)}</div>}</div>
+</div>
+<div className="relative mb-4">
+  <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 opacity-50 pointer-events-none" />
+  <input
+    type="text"
+    value={historySearchQuery}
+    onChange={(e) => setHistorySearchQuery(e.target.value)}
+    placeholder={chatHistory.length === 0 ? "Search conversation (no messages yet)…" : "Search conversation messages…"}
+    disabled={chatHistory.length === 0}
+    className="w-full h-10 pl-9 pr-8 rounded-full text-sm border outline-none transition-colors disabled:opacity-60"
+    style={{ background: "var(--surface)", borderColor: "var(--border)", color: "var(--text)" }}
+  />
+  {historySearchQuery && (
+    <button
+      aria-label="Clear search"
+      onClick={() => setHistorySearchQuery("")}
+      className="w-6 h-6 rounded-full absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center justify-center opacity-60 hover:opacity-100"
+      style={{ color: "var(--text)" }}
+    >
+      <X className="w-3.5 h-3.5" />
+    </button>
+  )}
+</div>
+{chatHistory.length === 0 ? (
+  <p className="text-sm text-center py-12" style={{color:"var(--muted)"}}>No messages yet.</p>
+) : filteredChatHistory.length === 0 ? (
+  <div className="text-center py-10">
+    <p className="text-sm font-medium" style={{color:"var(--muted)"}}>No messages matching "{historySearchQuery}"</p>
+    <button
+      onClick={() => setHistorySearchQuery("")}
+      className="mt-3 px-4 py-1.5 rounded-full text-xs font-semibold border"
+      style={{ background: "var(--surface)", borderColor: "var(--border)", color: "var(--text)" }}
+    >
+      Clear search
+    </button>
+  </div>
+) : (
+  <div className="space-y-4">
+    {historySearchQuery.trim() && (
+      <p className="text-[11px] font-semibold tracking-wide uppercase px-1" style={{ color: "var(--muted)" }}>
+        Found {filteredChatHistory.length} {filteredChatHistory.length === 1 ? 'match' : 'matches'}
+      </p>
+    )}
+    {filteredChatHistory.map((m, i) => (
+      <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+        <div
+          className="max-w-[85%] rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed break-words"
+          style={{
+            background: m.role === "user" ? "var(--accent)" : "var(--accent-soft)",
+            color: m.role === "user" ? "#fff" : "var(--text)",
+          }}
+        >
+          {m.parts[0]?.text}
+        </div>
+      </div>
+    ))}
+  </div>
+)}</div>
       </Overlay>
 
       <Overlay open={clearHistoryConfirmOpen} onClose={()=>setClearHistoryConfirmOpen(false)} bottom>
