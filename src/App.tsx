@@ -732,11 +732,11 @@ export default function App() {
           <div className="space-y-6">
             <section><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>AI mode</label>
               <div className="mt-3 grid grid-cols-2 gap-2 p-1 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}>
-                <button onClick={()=>{setAiMode("normal");localStorage.setItem("neto-ai-mode","normal")}} className="h-11 rounded-full text-sm font-semibold transition-colors" style={{background:aiMode==="normal"?"var(--text)":"transparent",color:aiMode==="normal"?"var(--bg)":"var(--text)"}}>Normal (Gemini)</button>
-                <button onClick={()=>{setAiMode("pro");localStorage.setItem("neto-ai-mode","pro")}} className="h-11 rounded-full text-sm font-semibold transition-colors" style={{background:aiMode==="pro"?"var(--text)":"transparent",color:aiMode==="pro"?"var(--bg)":"var(--text)"}}>Pro (OpenAI)</button>
+                <button onClick={()=>{setAiMode("normal");localStorage.setItem("neto-ai-mode","normal")}} className="h-11 rounded-full text-sm font-semibold transition-colors" style={{background:aiMode==="normal"?"var(--text)":"transparent",color:aiMode==="normal"?"var(--bg)":"var(--text)"}}>Normal</button>
+                <button onClick={()=>{setAiMode("pro");localStorage.setItem("neto-ai-mode","pro")}} className="h-11 rounded-full text-sm font-semibold transition-colors" style={{background:aiMode==="pro"?"var(--text)":"transparent",color:aiMode==="pro"?"var(--bg)":"var(--text)"}}>Pro</button>
               </div>
               <p className="text-xs mt-2" style={{color:"var(--muted)"}}>
-                {aiMode === "normal" ? "Normal mode runs on Google Gemini (fast, multi-modal & voice streaming)." : "Pro mode runs on OpenAI (advanced reasoning & high-tier models)."}
+                {aiMode === "normal" ? "Standard response mode with real-time voice streaming and multimodal capabilities." : "Advanced intelligence mode for deep reasoning and complex queries."}
               </p>
             </section>
             <section><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Account</label>
