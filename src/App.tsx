@@ -5,17 +5,15 @@
 import { useState, useEffect, useRef, useCallback, useMemo, type CSSProperties, type ReactNode } from "react";
 import { Menu, Settings, Plus, Clock, Mic, MicOff, X, Send, Volume2, VolumeX, Download, UserRound, ArrowLeft, ImagePlus, Trash2, Search, Smartphone, ExternalLink, Copy, RotateCcw, Square } from "lucide-react";
 import { uploadAttachment, signInWithGoogle, logout, onAuthChange, saveConversation, loadRecentConversations, clearAllConversations } from "./lib/firebase";
+import { executeAndroidCommand, parseAndroidCommand, type AndroidAction, type AndroidCommand } from "./lib/androidControl";
 
 type Status = "idle" | "listening" | "thinking" | "speaking";
 type Theme = "light" | "dark" | "midnight" | "warm" | "contrast";
 
 type Message = { role: "user" | "model"; parts: { text: string }[] };
 type ImageAttachment = { name: string; mimeType: string; url: string; storagePath: string; size: number; text?: string };
-type NativeAction = "open_settings" | "open_url" | "dial" | "compose_sms";
+type NativeAction = AndroidAction;
 
-declare global {
-  interface Window { NetoNative?: { execute(action: string): string }; }
-}
 
 const CREATOR = { name: "Macdonald Barasa", role: "Creator of Neto" };
 const APP_IDENTITY = { name: "Neto", company: "Neto", product: "Neto AI assistant", creator: CREATOR.name };
@@ -494,6 +492,7 @@ export default function App() {
     
     setChatHistory(prev => [...prev, { role: "user", parts: [{ text: attachment ? `${text || "Image attached"} [${attachment.name}]` : text }] }]);
 
+    if (!attachment && window.NetoNative) { const command = parseAndroidCommand(text); if (command) { setStatus("thinking"); const result = executeAndroidCommand(command); const reply = result?.message || "NETO could not complete that Android action."; setNativeActionStatus(reply); setChatHistory(prev => [...prev, { role: "model", parts: [{ text: reply }] }]); setStatus("idle"); void speakSentence(reply); return; } }
     const controller = new AbortController(); requestAbortRef.current = controller;
     const clientContext = {
       creator: CREATOR,
@@ -542,7 +541,7 @@ export default function App() {
         setChatHistory(prev => [...prev, { role: "model", parts: [{ text: `[Error: ${errorMessage}]` }] }]);
       }
     } finally { requestAbortRef.current = null; }
-  }, [aiMode, chatHistory, isInstalled, installPrompt, theme]);
+  }, [aiMode, chatHistory, isInstalled, installPrompt, speakSentence, theme]);
 
   const startListening = useCallback(async () => {
     if (isMicMuted) return;
@@ -597,13 +596,12 @@ export default function App() {
   }, [status, stopEverything, handleMessage, startListening]);
 
   const runNativeAction = useCallback((action: NativeAction, payload: Record<string, string> = {}) => {
-    if (!window.NetoNative) { setNativeActionStatus("Native actions are available in the NETO Android app only."); return; }
-    const consequential = action === "dial" || action === "compose_sms";
+    if (!window.NetoNative) { setNativeActionStatus("Android control is available in the NETO Android app only."); return; }
+    const consequential = action === "make_call" || action === "compose_sms";
     if (consequential && !window.confirm("NETO will open Android’s confirmation screen. Continue?")) return;
-    try {
-      const result = JSON.parse(window.NetoNative.execute(JSON.stringify({ action, ...payload })));
-      setNativeActionStatus(result?.message || (result?.ok ? "Action opened." : "Action was unavailable."));
-    } catch { setNativeActionStatus("NETO could not complete that device action."); }
+    const command: AndroidCommand = { type: "android_action", action, ...payload } as AndroidCommand;
+    const result = executeAndroidCommand(command);
+    setNativeActionStatus(result?.message || "NETO could not complete that device action.");
   }, []);
 
   const copyLastResponse = useCallback(async () => {
@@ -787,8 +785,8 @@ export default function App() {
           <div className="mt-4 grid grid-cols-2 gap-3">
             <button onClick={()=>runNativeAction("open_settings")} className="h-16 rounded-2xl border text-sm font-semibold" style={{background:"var(--surface)",borderColor:"var(--border)"}}>Open settings</button>
             <button onClick={()=>runNativeAction("open_url", { url: "https://neto-fnp7.onrender.com" })} className="h-16 rounded-2xl border text-sm font-semibold flex items-center justify-center gap-2" style={{background:"var(--surface)",borderColor:"var(--border)"}}>Open NETO site <ExternalLink className="w-4 h-4"/></button>
-            <button onClick={()=>{ const number = window.prompt("Phone number to dial:", ""); if (number) runNativeAction("dial", { number }); }} className="h-16 rounded-2xl border text-sm font-semibold" style={{background:"var(--surface)",borderColor:"var(--border)"}}>Prepare call</button>
-            <button onClick={()=>{ const number = window.prompt("Recipient phone number:", ""); const body = number ? window.prompt("Message:", "") : null; if (number && body !== null) runNativeAction("compose_sms", { number, body }); }} className="h-16 rounded-2xl border text-sm font-semibold" style={{background:"var(--surface)",borderColor:"var(--border)"}}>Prepare SMS</button>
+            <button onClick={()=>{ const number = window.prompt("Phone number to dial:", ""); if (number) runNativeAction("make_call", { target: number }); }} className="h-16 rounded-2xl border text-sm font-semibold" style={{background:"var(--surface)",borderColor:"var(--border)"}}>Prepare call</button>
+            <button onClick={()=>{ const number = window.prompt("Recipient phone number:", ""); const body = number ? window.prompt("Message:", "") : null; if (number && body !== null) runNativeAction("compose_sms", { target: number, text: body }); }} className="h-16 rounded-2xl border text-sm font-semibold" style={{background:"var(--surface)",borderColor:"var(--border)"}}>Prepare SMS</button>
           </div>
           {nativeActionStatus && <p role="status" className="mt-4 text-sm text-center" style={{color:"var(--muted)"}}>{nativeActionStatus}</p>}
         </div>
