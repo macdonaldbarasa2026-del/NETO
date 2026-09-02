@@ -272,7 +272,7 @@ async function startServer() {
         try {
           const { audio, text } = JSON.parse(data.toString());
           if (audio) (session as any).sendRealtimeInput({ audio: { data: audio, mimeType: "audio/pcm;rate=16000" } as any });
-          if (text) (session as any).send({ clientContent: { turns: [{ role: "user", parts: [{ text }] }], turnComplete: true } });
+          if (text) (session as any).sendClientContent({ turns: [{ role: "user", parts: [{ text }] }], turnComplete: true });
         } catch (e) {
           console.error("Error processing normal voice websocket message", e);
         }

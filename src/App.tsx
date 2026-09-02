@@ -494,11 +494,6 @@ export default function App() {
     
     setChatHistory(prev => [...prev, { role: "user", parts: [{ text: attachment ? `${text || "Image attached"} [${attachment.name}]` : text }] }]);
 
-    if (liveSessionRef.current && liveSessionRef.current.readyState === WebSocket.OPEN && !attachment) {
-      try { liveSessionRef.current.send(JSON.stringify({ text })); } catch {}
-      return;
-    }
-
     const controller = new AbortController(); requestAbortRef.current = controller;
     const clientContext = {
       creator: CREATOR,
