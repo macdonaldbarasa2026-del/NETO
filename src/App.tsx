@@ -355,6 +355,9 @@ export default function App() {
         try {
           const msg = JSON.parse(event.data);
           if (msg.audio) playLivePcm(msg.audio);
+          if (msg.error) { setTranscript(msg.error); setStatus("idle"); return; }
+          if (msg.listening) setStatus("listening");
+          if (msg.thinking) setStatus("thinking");
           if (msg.interrupted) {
             for (const source of playbackSourcesRef.current) { try { source.stop(); } catch {} }
             playbackSourcesRef.current.clear();
@@ -535,13 +538,14 @@ export default function App() {
         }
       }
       setChatHistory(prev => [...prev, { role: "model", parts: [{ text: fullResponse }] }]);
+      if (fullResponse.trim() && voiceMode) void speakSentence(fullResponse);
     } catch (error: any) {
       if (error?.name !== "AbortError") {
         const errorMessage = error?.message || "Sorry, I couldn't reach the AI service.";
         setChatHistory(prev => [...prev, { role: "model", parts: [{ text: `[Error: ${errorMessage}]` }] }]);
       }
     } finally { requestAbortRef.current = null; }
-  }, [aiMode, chatHistory, isInstalled, installPrompt, speakSentence, theme]);
+  }, [aiMode, chatHistory, isInstalled, installPrompt, speakSentence, theme, voiceMode]);
 
   const startListening = useCallback(async () => {
     if (isMicMuted) return;
@@ -744,7 +748,7 @@ export default function App() {
                   setImageAttachment({...uploaded, text});
                   setTranscript(`${file.name} uploaded.`);
                 } catch (error: any) {
-                  setTranscript(error?.message || "Upload failed. Please try again.");
+                  setTranscript(error?.code === "storage/unauthorized" ? "Sign in with Google before uploading a private image or file." : (error?.message || "Upload failed. Please try again."));
                 } finally {
                   setUploadingFile(false);
                 }

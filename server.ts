@@ -126,7 +126,7 @@ async function startServer() {
           upstream.send(JSON.stringify({
             type: "session.update",
             session: {
-              modalities: ["audio", "text"],
+              modalities: ["audio"],
               instructions: NETO_VOICE_INSTRUCTIONS,
               voice: process.env.OPENAI_PRO_VOICE || "alloy",
               input_audio_format: "pcm16",
@@ -258,7 +258,7 @@ async function startServer() {
         callbacks: {
           onmessage: (message: any) => {
             const content = message.serverContent;
-            const audio = content?.modelTurn?.parts?.[0]?.inlineData?.data;
+            const audio = content?.modelTurn?.parts?.find((part: any) => part?.inlineData?.data)?.inlineData?.data;
             if (audio) clientWs.send(JSON.stringify({ audio }));
             if (content?.interrupted) clientWs.send(JSON.stringify({ interrupted: true }));
             if (content?.inputTranscription?.text) clientWs.send(JSON.stringify({ inputTranscription: content.inputTranscription.text }));
