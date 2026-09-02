@@ -191,8 +191,10 @@ export default function App() {
         if ("wakeLock" in navigator) {
           wakeLockRef.current = await (navigator as any).wakeLock.request("screen");
         }
-      } catch (err) {
-        console.error("Wake Lock error:", err);
+      } catch (err: any) {
+        if (err.name !== 'NotAllowedError' && !err.message?.includes('permissions policy')) {
+          console.error("Wake Lock error:", err);
+        }
       }
     };
 
@@ -478,9 +480,17 @@ export default function App() {
 
   const handleMessage = useCallback(async (text: string, attachment?: ImageAttachment | null) => {
     if (!text.trim()) return;
-    stopEverything();
-    setStatus("thinking");
+    
+    // Do not call stopEverything() here. We want text and voice to "branch" 
+    // and run in parallel without "pollution collision"
+    
     setChatHistory(prev => [...prev, { role: "user", parts: [{ text: attachment ? `${text || "Image attached"} [${attachment.name}]` : text }] }]);
+
+    if (liveSessionRef.current && liveSessionRef.current.readyState === WebSocket.OPEN && !attachment) {
+      try { liveSessionRef.current.send(JSON.stringify({ text })); } catch {}
+      return;
+    }
+
     const controller = new AbortController(); requestAbortRef.current = controller;
     const clientContext = {
       creator: CREATOR,
@@ -515,33 +525,21 @@ export default function App() {
         throw new Error(serverMessage || `Request failed (${response.status})`);
       }
       const reader = response.body?.getReader(); const decoder = new TextDecoder();
-      let buffer = "", fullResponse = "", spoken = false;
+      let fullResponse = "";
       if (reader) {
         while (true) {
           const { done, value } = await reader.read(); if (done) break;
-          const chunk = decoder.decode(value, { stream: true }); buffer += chunk; fullResponse += chunk;
-          const match = buffer.match(/^([\s\S]*?[.!?](?:\s|$))/);
-          if (match) {
-            const sentence = match[1].trim();
-            buffer = buffer.slice(match[1].length);
-            if (sentence && !isMuted) { spoken = true; void speakSentence(sentence); }
-          }
-          if (isMuted) break;
+          fullResponse += decoder.decode(value, { stream: true });
         }
-        if (!isMuted && buffer.trim()) { spoken = true; void speakSentence(buffer.trim()); }
       }
-      setChatHistory(prev => [...prev, { role: "model", parts: [{ text: fullResponse || buffer }] }]);
-      setStatus("idle");
-      void spoken;
+      setChatHistory(prev => [...prev, { role: "model", parts: [{ text: fullResponse }] }]);
     } catch (error: any) {
       if (error?.name !== "AbortError") {
-        setStatus("idle");
-        const spokenError = error?.message || "Sorry, I couldn't reach the AI service.";
-        setTranscript(spokenError);
-        if (!isMuted) await speakSentence(spokenError);
+        const errorMessage = error?.message || "Sorry, I couldn't reach the AI service.";
+        setChatHistory(prev => [...prev, { role: "model", parts: [{ text: `[Error: ${errorMessage}]` }] }]);
       }
     } finally { requestAbortRef.current = null; }
-  }, [aiMode, chatHistory, isInstalled, installPrompt, isMuted, theme, stopEverything, speakSentence]);
+  }, [aiMode, chatHistory, isInstalled, installPrompt, theme]);
 
   const startListening = useCallback(async () => {
     if (isMicMuted) return;

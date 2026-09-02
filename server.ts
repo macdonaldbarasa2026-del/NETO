@@ -203,7 +203,7 @@ async function startServer() {
 
         clientWs.on("message", (data) => {
           try {
-            const { audio, cancel } = JSON.parse(data.toString());
+            const { audio, cancel, text } = JSON.parse(data.toString());
             if (cancel && upstream?.readyState === 1) {
               upstream.send(JSON.stringify({ type: "response.cancel" }));
               upstream.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
@@ -212,6 +212,10 @@ async function startServer() {
             if (audio && upstream?.readyState === 1) {
               const pcm24 = resamplePcm16Base64(audio, 16000, 24000);
               upstream.send(JSON.stringify({ type: "input_audio_buffer.append", audio: pcm24 }));
+            }
+            if (text && upstream?.readyState === 1) {
+              upstream.send(JSON.stringify({ type: "conversation.item.create", item: { type: "message", role: "user", content: [{ type: "input_text", text }] } }));
+              upstream.send(JSON.stringify({ type: "response.create" }));
             }
           } catch (error) {
             console.error("Error forwarding Pro voice input", error);
@@ -260,8 +264,9 @@ async function startServer() {
 
       clientWs.on("message", (data) => {
         try {
-          const { audio } = JSON.parse(data.toString());
+          const { audio, text } = JSON.parse(data.toString());
           if (audio) session.sendRealtimeInput({ audio: { data: audio, mimeType: "audio/pcm;rate=16000" } as any });
+          if (text) session.send({ clientContent: { turns: [{ role: "user", parts: [{ text }] }], turnComplete: true } });
         } catch (e) {
           console.error("Error processing normal voice websocket message", e);
         }
@@ -412,9 +417,10 @@ async function startServer() {
       res.setHeader("Transfer-Encoding", "chunked");
 
       const responseStream = await ai.models.generateContentStream({
-        model: "gemini-3.7-flash",
+        model: "gemini-3.1-flash",
         contents,
         config: {
+          tools: [{ googleSearch: {} }],
           systemInstruction: `You are Neto, the AI assistant inside the Neto app.
 Identity rules:
 - Your name is Neto.
@@ -424,7 +430,7 @@ Identity rules:
 - The AI service is an internal implementation detail. Do not expose provider names unless the user explicitly asks about the technical stack.
 - If asked who created you or the app, answer: "I was created for Neto by Macdonald Barasa."
 - Do not invent biography, location, contact details, social links, achievements, ownership, or company history for Macdonald Barasa.
-- Be honest about capabilities. You can analyze text, images, and supported PDF attachments supplied by the app.
+- Be honest about capabilities. You can analyze text, images, and supported PDF attachments supplied by the app. You also have access to Google Search for finding real-time information.
 Conversation rules:
 - Answer text messages normally and directly. Never require voice input for a text question.
 - Keep replies concise by default, but give detail when requested.
@@ -458,8 +464,10 @@ Client context: ${JSON.stringify(clientContext)}`,
         }
       }
     } catch (error: any) {
-      console.error("Error in /api/chat-stream:", error);
       const isRateLimit = error?.status === 429 || String(error?.message || "").includes("429");
+      if (!isRateLimit) {
+        console.error("Error in /api/chat-stream:", error);
+      }
       const errorMsg = isRateLimit ? "Sorry, you have reached the limit. Please try again later." : "Sorry, my systems are currently overloaded. Please try again in a moment.";
       if (!res.headersSent) res.status(isRateLimit ? 429 : 500).json({ error: errorMsg });
       else { res.write(errorMsg); res.end(); }
