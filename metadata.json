@@ -1,6 +1,11 @@
 {
-  "name": "",
-  "description": "",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "name": "Neto AI",
+  "description": "Real-time AI voice assistant with chat and multimodal capabilities.",
+  "requestFramePermissions": [
+    "microphone",
+    "screen-wake-lock"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

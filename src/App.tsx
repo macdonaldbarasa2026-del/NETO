@@ -183,6 +183,35 @@ export default function App() {
     return undefined;
   }, []);
 
+  const wakeLockRef = useRef<any>(null);
+
+  useEffect(() => {
+    const requestWakeLock = async () => {
+      try {
+        if ("wakeLock" in navigator) {
+          wakeLockRef.current = await (navigator as any).wakeLock.request("screen");
+        }
+      } catch (err) {
+        console.error("Wake Lock error:", err);
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") requestWakeLock();
+    };
+
+    requestWakeLock();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      if (wakeLockRef.current) {
+        wakeLockRef.current.release().catch(() => {});
+        wakeLockRef.current = null;
+      }
+    };
+  }, []);
+
   const stopAmbient = useCallback(() => {
     try { ambientGainRef.current?.gain.exponentialRampToValueAtTime(0.0001, (ambientRef.current?.currentTime || 0) + 0.15); } catch {}
     setTimeout(() => { try { ambientRef.current?.close(); } catch {} ambientRef.current = null; ambientGainRef.current = null; }, 250);

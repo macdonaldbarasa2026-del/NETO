@@ -108,7 +108,7 @@ async function startServer() {
       let upstream: any;
       try {
         const WebSocket = (await import("ws")).default;
-        const model = process.env.OPENAI_PRO_REALTIME_MODEL || "gpt-realtime-2.1";
+        const model = process.env.OPENAI_PRO_REALTIME_MODEL || "gpt-4o-mini-realtime-preview";
         upstream = new WebSocket(`wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`, {
           headers: {
             Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -120,17 +120,20 @@ async function startServer() {
           upstream.send(JSON.stringify({
             type: "session.update",
             session: {
-              type: "realtime",
-              output_modalities: ["audio"],
+              modalities: ["audio", "text"],
               instructions: NETO_VOICE_INSTRUCTIONS,
-              audio: {
-                input: {
-                  format: { type: "audio/pcm", rate: 24000 },
-                  noise_reduction: { type: "near_field" },
-                  transcription: { model: "gpt-4o-mini-transcribe" },
-                  turn_detection: { type: "server_vad", threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 450, create_response: true },
-                },
-                output: { format: { type: "audio/pcm", rate: 24000 }, voice: process.env.OPENAI_PRO_VOICE || "marin" },
+              voice: process.env.OPENAI_PRO_VOICE || "alloy",
+              input_audio_format: "pcm16",
+              output_audio_format: "pcm16",
+              input_audio_transcription: {
+                model: "whisper-1",
+              },
+              turn_detection: {
+                type: "server_vad",
+                threshold: 0.5,
+                prefix_padding_ms: 300,
+                silence_duration_ms: 500,
+                create_response: true,
               },
             },
           }));
@@ -141,6 +144,7 @@ async function startServer() {
           try {
             const event = JSON.parse(raw.toString());
             switch (event.type) {
+              case "response.audio.delta":
               case "response.output_audio.delta":
                 if (event.delta) clientWs.send(JSON.stringify({ audio: event.delta }));
                 break;
@@ -150,14 +154,16 @@ async function startServer() {
               case "conversation.item.input_audio_transcription.completed":
                 if (event.transcript) clientWs.send(JSON.stringify({ inputTranscription: event.transcript, inputTranscriptionFinal: true }));
                 break;
+              case "response.audio_transcript.delta":
               case "response.output_audio_transcript.delta":
                 if (event.delta) clientWs.send(JSON.stringify({ outputTranscription: event.delta }));
                 break;
+              case "response.audio_transcript.done":
               case "response.output_audio_transcript.done":
                 if (event.transcript) clientWs.send(JSON.stringify({ outputTranscription: event.transcript, outputTranscriptionFinal: true }));
                 break;
               case "input_audio_buffer.speech_started":
-                clientWs.send(JSON.stringify({ listening: true }));
+                clientWs.send(JSON.stringify({ listening: true, interrupted: true }));
                 break;
               case "input_audio_buffer.speech_stopped":
                 clientWs.send(JSON.stringify({ thinking: true }));
@@ -177,8 +183,8 @@ async function startServer() {
                 clientWs.send(JSON.stringify({ interrupted: true }));
                 break;
               case "error":
-                console.error("Pro realtime error:", event.error || event);
-                clientWs.send(JSON.stringify({ error: "Pro voice is temporarily unavailable." }));
+                console.error("OpenAI Realtime error:", event.error || event);
+                clientWs.send(JSON.stringify({ error: event.error?.message || "Pro voice is temporarily unavailable." }));
                 break;
             }
           } catch (error) {
@@ -309,11 +315,21 @@ async function startServer() {
         }
         openAiMessages.push({ role: "user", content: userContent });
 
-        const openAiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
+        let openAiModel = process.env.OPENAI_PRO_MODEL || "gpt-4o-mini";
+        let openAiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
-          body: JSON.stringify({ model: process.env.OPENAI_PRO_MODEL || "gpt-5.6", messages: openAiMessages, stream: true })
+          body: JSON.stringify({ model: openAiModel, messages: openAiMessages, stream: true })
         });
+        if (!openAiResponse.ok && openAiModel !== "gpt-4o-mini") {
+          console.warn(`Pro API error with model ${openAiModel}, retrying with gpt-4o-mini...`);
+          openAiModel = "gpt-4o-mini";
+          openAiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+            body: JSON.stringify({ model: openAiModel, messages: openAiMessages, stream: true })
+          });
+        }
         if (!openAiResponse.ok) {
           const detail = await openAiResponse.text();
           console.error("Pro API error:", detail);
