@@ -53,7 +53,8 @@ export async function uploadAttachment(file: File) {
 
   const task = uploadBytesResumable(storageRef, file, {
     contentType: file.type || "application/octet-stream",
-    cacheControl: "public,max-age=3600",
+    // Download URLs are bearer URLs, so shared caches must not retain uploads.
+    cacheControl: "private,no-store",
   });
 
   await new Promise<void>((resolve, reject) => {

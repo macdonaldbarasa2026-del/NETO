@@ -2,8 +2,8 @@
  * Neto — voice-first AI assistant
  * Creator: Macdonald Barasa
  */
-import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
-import { Menu, Settings, Plus, Clock, Mic, MicOff, X, Send, Volume2, VolumeX, Download, UserRound, ArrowLeft, ImagePlus, Trash2, Search } from "lucide-react";
+import { useState, useEffect, useRef, useCallback, useMemo, type CSSProperties, type ReactNode } from "react";
+import { Menu, Settings, Plus, Clock, Mic, MicOff, X, Send, Volume2, VolumeX, Download, UserRound, ArrowLeft, ImagePlus, Trash2, Search, Smartphone, ExternalLink, Copy, RotateCcw, Square } from "lucide-react";
 import { uploadAttachment, signInWithGoogle, logout, onAuthChange, saveConversation, loadRecentConversations, clearAllConversations } from "./lib/firebase";
 
 type Status = "idle" | "listening" | "thinking" | "speaking";
@@ -11,6 +11,11 @@ type Theme = "light" | "dark" | "midnight" | "warm" | "contrast";
 
 type Message = { role: "user" | "model"; parts: { text: string }[] };
 type ImageAttachment = { name: string; mimeType: string; url: string; storagePath: string; size: number; text?: string };
+type NativeAction = "open_settings" | "open_url" | "dial" | "compose_sms";
+
+declare global {
+  interface Window { NetoNative?: { execute(action: string): string }; }
+}
 
 const CREATOR = { name: "Macdonald Barasa", role: "Creator of Neto" };
 const APP_IDENTITY = { name: "Neto", company: "Neto", product: "Neto AI assistant", creator: CREATOR.name };
@@ -36,8 +41,8 @@ function OrbSparkles({ status, energy }: { status: Status; energy: number }) {
   const active = status !== 'idle';
   const strength = Math.min(1, Math.max(0.08, energy));
   return (
-    <div className={`orb-sparkles ${active ? 'is-active' : ''} status-${status}`} aria-hidden='true' style={{ '--spark-strength': strength } as React.CSSProperties}>
-      {particles.map(p => <span key={p.id} className='orb-sparkle' style={{ left: `${p.x}%`, top: `${p.y}%`, width: p.size, height: p.size, animationDelay: `${p.delay}s`, animationDuration: `${p.duration}s`, '--spark-drift': `${p.drift}px` } as React.CSSProperties} />)}
+    <div className={`orb-sparkles ${active ? 'is-active' : ''} status-${status}`} aria-hidden='true' style={{ '--spark-strength': strength } as CSSProperties}>
+      {particles.map(p => <span key={p.id} className='orb-sparkle' style={{ left: `${p.x}%`, top: `${p.y}%`, width: p.size, height: p.size, animationDelay: `${p.delay}s`, animationDuration: `${p.duration}s`, '--spark-drift': `${p.drift}px` } as CSSProperties} />)}
     </div>
   );
 }
@@ -50,6 +55,7 @@ export default function App() {
   const [uploadingFile, setUploadingFile] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [deviceOpen, setDeviceOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [clearHistoryConfirmOpen, setClearHistoryConfirmOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
@@ -80,7 +86,7 @@ export default function App() {
       if (user) {
         loadRecentConversations().then((conversations) => {
           if (conversations && conversations.length > 0) {
-            setChatHistory(conversations[0].messages || []);
+            setChatHistory((conversations[0] as { messages?: Message[] }).messages || []);
           }
         });
       } else {
@@ -96,6 +102,8 @@ export default function App() {
   const [endConfirmOpen, setEndConfirmOpen] = useState(false);
   const [orbEnergy, setOrbEnergy] = useState(0.12);
   const [manualInstallInfo, setManualInstallInfo] = useState<{ platform: string; steps: string[] } | null>(null);
+  const [nativeActionStatus, setNativeActionStatus] = useState("");
+  const nativeAvailable = typeof window !== "undefined" && !!window.NetoNative;
 
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const recognitionRef = useRef<any>(null);
@@ -593,6 +601,28 @@ export default function App() {
     else void startListening();
   }, [status, stopEverything, handleMessage, startListening]);
 
+  const runNativeAction = useCallback((action: NativeAction, payload: Record<string, string> = {}) => {
+    if (!window.NetoNative) { setNativeActionStatus("Native actions are available in the NETO Android app only."); return; }
+    const consequential = action === "dial" || action === "compose_sms";
+    if (consequential && !window.confirm("NETO will open Android’s confirmation screen. Continue?")) return;
+    try {
+      const result = JSON.parse(window.NetoNative.execute(JSON.stringify({ action, ...payload })));
+      setNativeActionStatus(result?.message || (result?.ok ? "Action opened." : "Action was unavailable."));
+    } catch { setNativeActionStatus("NETO could not complete that device action."); }
+  }, []);
+
+  const copyLastResponse = useCallback(async () => {
+    const message = [...chatHistory].reverse().find(item => item.role === "model")?.parts[0]?.text;
+    if (!message) return;
+    try { await navigator.clipboard.writeText(message); setTranscript("Response copied."); } catch { setTranscript("Copy is not available in this browser."); }
+  }, [chatHistory]);
+
+  const regenerateLastResponse = useCallback(() => {
+    const previous = [...chatHistory].reverse().find(item => item.role === "user")?.parts[0]?.text;
+    if (previous) void handleMessage(previous);
+  }, [chatHistory, handleMessage]);
+
+
   const toggleMic = useCallback(() => {
     setIsMicMuted(prev => {
       const next = !prev;
@@ -621,7 +651,7 @@ export default function App() {
   }, [installPrompt]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setMenuOpen(false); setSettingsOpen(false); setHistoryOpen(false); setAboutOpen(false); setInstallOpen(false); } if (e.key === "Enter" && e.ctrlKey) submitText(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setMenuOpen(false); setSettingsOpen(false); setHistoryOpen(false); setDeviceOpen(false); setAboutOpen(false); setInstallOpen(false); } if (e.key === "Enter" && e.ctrlKey) submitText(); };
     window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
   }, [submitText]);
 
@@ -678,7 +708,7 @@ export default function App() {
 
       <div className="flex flex-col items-center justify-center h-full min-h-[100dvh] px-4 pt-[max(64px,calc(env(safe-area-inset-top)+54px))] pb-[max(88px,calc(env(safe-area-inset-bottom)+76px))] select-none">
         <div className="h-6 mb-3 sm:mb-6 flex items-center justify-center">{statusText ? <span className="text-[12.5px] sm:text-[13px] tracking-wide font-medium px-3 py-1 rounded-full backdrop-blur border" style={{background:"var(--surface)",borderColor:"var(--border)",color:"var(--muted)"}}>{statusText}</span> : <span className="text-[13px] opacity-0">idle</span>}</div>
-        <div className="relative flex items-center justify-center orb-reactive" style={{ "--orb-energy": orbEnergy } as React.CSSProperties}>
+        <div className="relative flex items-center justify-center orb-reactive" style={{ "--orb-energy": orbEnergy } as CSSProperties}>
           {(status === "listening" || status === "speaking") && [0,1,2].map(i => <div key={i} className="absolute w-[min(290px,78vw)] h-[min(290px,78vw)] rounded-full border pointer-events-none" style={{borderColor:status==="speaking"?"rgba(16,163,127,.22)":"rgba(100,140,255,.25)",animation:`pulseRing ${status==="speaking"?"1.25":"1.8"}s ease-out ${i*.3}s infinite`}}/>) }
           <OrbSparkles status={status} energy={orbEnergy} />
           <div className="absolute rounded-full blur-[20px] transition-all duration-700 pointer-events-none" style={{width: status === "listening" ? "min(340px, 86vw)" : "min(300px, 80vw)", height: status === "listening" ? "min(340px, 86vw)" : "min(300px, 80vw)", background:"radial-gradient(circle,var(--orb-glow),transparent 70%)"}} />
@@ -751,7 +781,22 @@ export default function App() {
 
       <Overlay open={menuOpen} onClose={()=>closePanel(setMenuOpen)} side>
         <div className="px-7 pt-[max(24px,env(safe-area-inset-top))] pb-6 border-b" style={{borderColor:"var(--border)"}}><div className="w-10 h-10 rounded-full mb-4" style={{background:"linear-gradient(180deg,var(--orb-top),var(--orb-bottom))"}}/><h2 className="text-lg font-semibold">Neto</h2><p className="text-sm mt-1" style={{color:"var(--muted)"}}>Voice-first AI assistant</p></div>
-        <nav className="p-3 flex flex-col gap-1.5"><Action icon={<Plus/>} text="New chat" onClick={()=>{setMenuOpen(false);intentionalStopRef.current=true;keepListeningRef.current=false;stopEverything();setTranscript("");setChatHistory([])}}/><Action icon={<Clock/>} text="History" onClick={()=>{setMenuOpen(false);openPanel(setHistoryOpen)}}/><Action icon={<Settings/>} text="Settings" onClick={()=>{setMenuOpen(false);openPanel(setSettingsOpen)}}/><Action icon={<UserRound/>} text="About creator" onClick={()=>{setMenuOpen(false);openPanel(setAboutOpen)}}/><Action icon={<Download/>} text={isInstalled?"App installed":"Install app"} disabled={isInstalled} onClick={()=>{setMenuOpen(false);openPanel(setInstallOpen)}}/></nav>
+        <nav className="p-3 flex flex-col gap-1.5"><Action icon={<Plus/>} text="New chat" onClick={()=>{setMenuOpen(false);intentionalStopRef.current=true;keepListeningRef.current=false;stopEverything();setTranscript("");setChatHistory([])}}/><Action icon={<Clock/>} text="History" onClick={()=>{setMenuOpen(false);openPanel(setHistoryOpen)}}/><Action icon={<Smartphone/>} text="Device" onClick={()=>{setMenuOpen(false);openPanel(setDeviceOpen)}}/><Action icon={<Settings/>} text="Settings" onClick={()=>{setMenuOpen(false);openPanel(setSettingsOpen)}}/><Action icon={<UserRound/>} text="About creator" onClick={()=>{setMenuOpen(false);openPanel(setAboutOpen)}}/><Action icon={<Download/>} text={isInstalled?"App installed":"Install app"} disabled={isInstalled} onClick={()=>{setMenuOpen(false);openPanel(setInstallOpen)}}/></nav>
+      </Overlay>
+
+      <Overlay open={deviceOpen} onClose={()=>closePanel(setDeviceOpen)} bottom>
+        <div className="mx-auto max-w-[560px] px-6 pt-3 pb-[max(20px,env(safe-area-inset-bottom))]">
+          <div className="flex justify-center pb-4"><div className="w-9 h-1 rounded-full bg-black/10"/></div>
+          <div className="flex items-center justify-between mb-5"><div className="flex items-center gap-3"><button aria-label="Back to home" onClick={()=>closePanel(setDeviceOpen)} className="w-10 h-10 rounded-full flex items-center justify-center" style={{background:"var(--accent-soft)"}}><ArrowLeft className="w-4 h-4"/></button><div><h3 className="text-lg font-semibold">Device</h3><p className="text-xs" style={{color:"var(--muted)"}}>{nativeAvailable ? "NETO Android bridge connected" : "Web capabilities only"}</p></div></div><Smartphone className="w-5 h-5" style={{color:"var(--accent)"}}/></div>
+          <p className="text-sm leading-relaxed rounded-2xl p-4 border" style={{background:"var(--surface)",borderColor:"var(--border)",color:"var(--muted)"}}>Actions always open the official Android screen. NETO cannot grant permissions, send a message, or place a call silently.</p>
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <button onClick={()=>runNativeAction("open_settings")} className="h-16 rounded-2xl border text-sm font-semibold" style={{background:"var(--surface)",borderColor:"var(--border)"}}>Open settings</button>
+            <button onClick={()=>runNativeAction("open_url", { url: "https://neto-fnp7.onrender.com" })} className="h-16 rounded-2xl border text-sm font-semibold flex items-center justify-center gap-2" style={{background:"var(--surface)",borderColor:"var(--border)"}}>Open NETO site <ExternalLink className="w-4 h-4"/></button>
+            <button onClick={()=>{ const number = window.prompt("Phone number to dial:", ""); if (number) runNativeAction("dial", { number }); }} className="h-16 rounded-2xl border text-sm font-semibold" style={{background:"var(--surface)",borderColor:"var(--border)"}}>Prepare call</button>
+            <button onClick={()=>{ const number = window.prompt("Recipient phone number:", ""); const body = number ? window.prompt("Message:", "") : null; if (number && body !== null) runNativeAction("compose_sms", { number, body }); }} className="h-16 rounded-2xl border text-sm font-semibold" style={{background:"var(--surface)",borderColor:"var(--border)"}}>Prepare SMS</button>
+          </div>
+          {nativeActionStatus && <p role="status" className="mt-4 text-sm text-center" style={{color:"var(--muted)"}}>{nativeActionStatus}</p>}
+        </div>
       </Overlay>
 
       <Overlay open={settingsOpen} onClose={()=>closePanel(setSettingsOpen)} bottom>

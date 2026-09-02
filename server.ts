@@ -1,9 +1,7 @@
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
-import cors from "cors";
 import { initializeApp, getApps, cert } from "firebase-admin/app";
-import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { GoogleGenAI } from "@google/genai";
 
 let ai: GoogleGenAI | null = null;
@@ -39,32 +37,40 @@ if (serviceAccountKey) {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
+  const requestWindowMs = 10 * 60 * 1000;
+  const requestLimit = 40;
+  const requestBuckets = new Map<string, { count: number; startedAt: number }>();
 
-  app.use(cors());
+  // The API is deliberately same-origin. API credentials stay on this server and
+  // should never be exposed to arbitrary browser origins.
+  app.disable("x-powered-by");
+  app.use((req, res, next) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    res.setHeader("Permissions-Policy", "camera=(self), microphone=(self), geolocation=()");
+    next();
+  });
   app.use(express.json({ limit: "2mb" }));
+
+  const rateLimitChat = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const forwarded = req.headers["x-forwarded-for"];
+    const ip = (Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(",")[0])?.trim() || req.socket.remoteAddress || "unknown";
+    const now = Date.now();
+    const bucket = requestBuckets.get(ip);
+    if (!bucket || now - bucket.startedAt > requestWindowMs) {
+      requestBuckets.set(ip, { count: 1, startedAt: now });
+      return next();
+    }
+    bucket.count += 1;
+    if (bucket.count > requestLimit) return res.status(429).json({ error: "Too many requests. Please wait a few minutes and try again." });
+    next();
+  };
 
   // --- API Routes ---
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
-  });
-
-  // Example API route interacting with Firestore
-  app.get("/api/data", async (req, res) => {
-    try {
-      if (!getApps().length) {
-        return res.status(503).json({ error: "Firebase Admin is not configured" });
-      }
-      
-      const db = getFirestore();
-      const snapshot = await db.collection("items").limit(10).get();
-      const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      
-      res.json({ items });
-    } catch (error) {
-      console.error("Error fetching from Firestore", error);
-      res.status(500).json({ error: "Internal server error" });
-    }
   });
 
   // --- WebSocket Server for Live API ---
@@ -243,11 +249,11 @@ async function startServer() {
       const session = await ai.live.connect({
         model: "gemini-3.1-flash-live-preview",
         config: {
-          responseModalities: ["AUDIO"],
+          responseModalities: ["AUDIO"] as any,
           systemInstruction: NETO_VOICE_INSTRUCTIONS,
           inputAudioTranscription: {},
           outputAudioTranscription: {},
-          thinkingConfig: { thinkingLevel: "minimal" },
+          thinkingConfig: { thinkingLevel: "minimal" as any },
         },
         callbacks: {
           onmessage: (message: any) => {
@@ -265,8 +271,8 @@ async function startServer() {
       clientWs.on("message", (data) => {
         try {
           const { audio, text } = JSON.parse(data.toString());
-          if (audio) session.sendRealtimeInput({ audio: { data: audio, mimeType: "audio/pcm;rate=16000" } as any });
-          if (text) session.send({ clientContent: { turns: [{ role: "user", parts: [{ text }] }], turnComplete: true } });
+          if (audio) (session as any).sendRealtimeInput({ audio: { data: audio, mimeType: "audio/pcm;rate=16000" } as any });
+          if (text) (session as any).send({ clientContent: { turns: [{ role: "user", parts: [{ text }] }], turnComplete: true } });
         } catch (e) {
           console.error("Error processing normal voice websocket message", e);
         }
@@ -280,42 +286,61 @@ async function startServer() {
   });
 
   // Chat API stream route. Normal uses Gemini. Pro uses OpenAI.
-  app.post("/api/chat-stream", async (req, res) => {
+  app.post("/api/chat-stream", rateLimitChat, async (req, res) => {
     try {
-      const { message, history = [], sessionId = "default-session", clientContext = {}, attachment = null, mode = "normal" } = req.body;
+      const { message, history = [], clientContext = {}, attachment = null, mode = "normal" } = req.body || {};
+      if (typeof message !== "string" || message.length > 12_000) return res.status(400).json({ error: "Message must be text shorter than 12,000 characters." });
+      if (mode !== "normal" && mode !== "pro") return res.status(400).json({ error: "Unsupported AI mode." });
+      const safeHistory = (Array.isArray(history) ? history : []).slice(-12).map((item: any) => ({
+        role: item?.role === "model" ? "model" : "user",
+        parts: [{ text: Array.isArray(item?.parts) ? item.parts.map((part: any) => typeof part?.text === "string" ? part.text : "").join("\n").slice(0, 6_000) : "" }],
+      })).filter((item) => item.parts[0].text);
+      const safeAttachment = attachment && typeof attachment === "object" ? {
+        name: typeof attachment.name === "string" ? attachment.name.slice(0, 160) : "attachment",
+        mimeType: typeof attachment.mimeType === "string" ? attachment.mimeType.slice(0, 128) : "application/octet-stream",
+        url: typeof attachment.url === "string" ? attachment.url.slice(0, 4_096) : "",
+        size: Number.isFinite(Number(attachment.size)) ? Number(attachment.size) : 0,
+        text: typeof attachment.text === "string" ? attachment.text.slice(0, 12_000) : "",
+      } : null;
+      const safeClientContext = {
+        installed: clientContext?.installed === true,
+        nativeCapabilities: clientContext?.nativeCapabilities === true,
+        theme: typeof clientContext?.theme === "string" ? clientContext.theme.slice(0, 32) : "default",
+        mode,
+      };
 
       if (mode === "pro") {
         if (!process.env.OPENAI_API_KEY) return res.status(503).json({ error: "Pro is not configured yet." });
-        const safeHistory = Array.isArray(history) ? history.slice(-20) : [];
         const openAiMessages: any[] = [
           {
             role: "developer",
-            content: `You are Neto, the AI assistant inside the Neto app. The product identity is Neto and the verified creator is Macdonald Barasa. Do not expose the underlying AI provider unless the user explicitly asks about the technical stack. Be concise by default, direct, natural, and helpful. Client context: ${JSON.stringify(clientContext)}`
+            content: `You are Neto, the AI assistant inside the Neto app. The product identity is Neto and the verified creator is Macdonald Barasa. Do not expose the underlying AI provider unless the user explicitly asks about the technical stack. Be concise by default, direct, natural, and helpful. Do not claim to execute device actions; the user must explicitly initiate and confirm them in the Device screen. Client context: ${JSON.stringify(safeClientContext)}`
           },
-          ...safeHistory.map((item: any) => ({
-            role: item?.role === "model" ? "assistant" : "user",
-            content: Array.isArray(item?.parts) ? item.parts.map((part: any) => part?.text || "").join("\n") : String(item?.content || "")
-          })).filter((item: any) => item.content)
+          ...safeHistory.map((item) => ({
+            role: item.role === "model" ? "assistant" : "user",
+            content: item.parts[0].text
+          })).filter((item) => item.content)
         ];
 
-        const userText = message || (attachment?.mimeType?.startsWith("image/") ? "Please analyze the attached image." : "Please analyze the attached file.");
+        const userText = message || (safeAttachment?.mimeType.startsWith("image/") ? "Please analyze the attached image." : "Please analyze the attached file.");
         const userContent: any[] = [{ type: "text", text: userText }];
-        if (attachment?.text) userContent.push({ type: "text", text: `Attached file ${attachment.name || "file"} contains:\n${String(attachment.text).slice(0, 12000)}` });
+        if (safeAttachment?.text) userContent.push({ type: "text", text: `Attached file ${safeAttachment.name} contains:\n${safeAttachment.text}` });
 
-        if (attachment?.url && attachment?.mimeType) {
+        if (safeAttachment?.url && safeAttachment?.mimeType) {
           const allowedHosts = new Set(["firebasestorage.googleapis.com", "storage.googleapis.com"]);
-          const parsedUrl = new URL(attachment.url);
-          if (!allowedHosts.has(parsedUrl.hostname)) return res.status(400).json({ error: "Attachment URL is not supported." });
-          if (Number(attachment.size || 0) > 10 * 1024 * 1024) return res.status(413).json({ error: "Files must be 10 MB or smaller." });
-          const fileResponse = await fetch(attachment.url);
+          const parsedUrl = new URL(safeAttachment.url);
+          if (parsedUrl.protocol !== "https:" || !allowedHosts.has(parsedUrl.hostname)) return res.status(400).json({ error: "Attachment URL is not supported." });
+          if (safeAttachment.size > 10 * 1024 * 1024) return res.status(413).json({ error: "Files must be 10 MB or smaller." });
+          const fileResponse = await fetch(safeAttachment.url, { redirect: "error", signal: AbortSignal.timeout(15_000) });
           if (!fileResponse.ok) throw new Error("Could not read the uploaded file.");
           const buffer = Buffer.from(await fileResponse.arrayBuffer());
-          const mimeType = String(attachment.mimeType).split(";")[0].toLowerCase();
+          if (buffer.length > 10 * 1024 * 1024) return res.status(413).json({ error: "Uploaded file is too large." });
+          const mimeType = safeAttachment.mimeType.split(";")[0].toLowerCase();
           if (/^image\/(png|jpeg|jpg|webp|gif)$/.test(mimeType)) {
             const normalized = mimeType === "image/jpg" ? "image/jpeg" : mimeType;
             userContent.push({ type: "image_url", image_url: { url: `data:${normalized};base64,${buffer.toString("base64")}` } });
-          } else if (!attachment.text) {
-            userContent.push({ type: "text", text: `The uploaded file ${attachment.name || "attachment"} is stored in the app. Its MIME type is ${mimeType}.` });
+          } else if (!safeAttachment.text) {
+            userContent.push({ type: "text", text: `The uploaded file ${safeAttachment.name} is stored in the app. Its MIME type is ${mimeType}.` });
           }
         }
         openAiMessages.push({ role: "user", content: userContent });
@@ -368,47 +393,37 @@ async function startServer() {
         }
         res.end();
 
-        if (getApps().length) {
-          try {
-            const db = getFirestore();
-            const sessionRef = db.collection("conversations").doc(String(sessionId).slice(0, 100));
-            const attachmentMeta = attachment ? { name: attachment.name, mimeType: attachment.mimeType, storagePath: attachment.storagePath, size: attachment.size } : null;
-            await sessionRef.collection("messages").add({ role: "user", text: message, attachment: attachmentMeta, timestamp: FieldValue.serverTimestamp(), mode: "pro" });
-            await sessionRef.collection("messages").add({ role: "model", text: fullText, timestamp: FieldValue.serverTimestamp(), mode: "pro" });
-          } catch (dbError) { console.error("Failed to save Pro conversation:", dbError); }
-        }
         return;
       }
 
       if (!ai) return res.status(503).json({ error: "Normal service is not configured" });
-      const safeHistory = Array.isArray(history) ? history.slice(-20) : [];
-      const userParts: any[] = [{ text: message || (attachment?.mimeType?.startsWith("image/") ? "Please analyze the attached image." : "Please analyze the attached file.") }];
+      const userParts: any[] = [{ text: message || (safeAttachment?.mimeType.startsWith("image/") ? "Please analyze the attached image." : "Please analyze the attached file.") }];
 
-      if (attachment?.text) {
-        userParts.push({ text: `Attached file ${attachment.name || "file"} contains:\n${String(attachment.text).slice(0, 12000)}` });
+      if (safeAttachment?.text) {
+        userParts.push({ text: `Attached file ${safeAttachment.name} contains:\n${safeAttachment.text}` });
       }
 
-      if (attachment?.url && attachment?.mimeType) {
+      if (safeAttachment?.url && safeAttachment?.mimeType) {
         const allowedHosts = new Set(["firebasestorage.googleapis.com", "storage.googleapis.com"]);
-        const parsedUrl = new URL(attachment.url);
-        if (!allowedHosts.has(parsedUrl.hostname)) {
+        const parsedUrl = new URL(safeAttachment.url);
+        if (parsedUrl.protocol !== "https:" || !allowedHosts.has(parsedUrl.hostname)) {
           return res.status(400).json({ error: "Attachment URL is not a supported Firebase Storage URL." });
         }
-        if (Number(attachment.size || 0) > 10 * 1024 * 1024) {
+        if (safeAttachment.size > 10 * 1024 * 1024) {
           return res.status(413).json({ error: "Files must be 10 MB or smaller." });
         }
 
-        const fileResponse = await fetch(attachment.url);
+        const fileResponse = await fetch(safeAttachment.url, { redirect: "error", signal: AbortSignal.timeout(15_000) });
         if (!fileResponse.ok) throw new Error("Could not read the uploaded Firebase file.");
         const buffer = Buffer.from(await fileResponse.arrayBuffer());
         if (buffer.length > 10 * 1024 * 1024) return res.status(413).json({ error: "Uploaded file is too large." });
 
-        const mimeType = String(attachment.mimeType).split(";")[0].toLowerCase();
+        const mimeType = safeAttachment.mimeType.split(";")[0].toLowerCase();
         const supportedInline = /^(image\/(png|jpeg|jpg|webp|gif)|application\/pdf)$/.test(mimeType);
         if (supportedInline) {
           userParts.push({ inlineData: { mimeType: mimeType === "image/jpg" ? "image/jpeg" : mimeType, data: buffer.toString("base64") } });
-        } else if (!attachment.text) {
-          userParts.push({ text: `The file ${attachment.name || "attachment"} was uploaded to Firebase Storage. Its MIME type is ${mimeType}. The app could not extract readable text from this file on the client.` });
+        } else if (!safeAttachment.text) {
+          userParts.push({ text: `The file ${safeAttachment.name} was uploaded to Firebase Storage. Its MIME type is ${mimeType}. The app could not extract readable text from this file on the client.` });
         }
       }
 
@@ -439,7 +454,9 @@ Installation awareness:
 - Neto is a Progressive Web App (PWA).
 - If installed is false and the user asks to install, explain that the app's Install button or browser Add to Home Screen/Install option should be used.
 - Never falsely claim installation succeeded.
-Client context: ${JSON.stringify(clientContext)}`,
+Device action policy:
+- Never claim to execute a device action. The user must explicitly initiate and confirm supported actions in the Device screen.
+Client context: ${JSON.stringify(safeClientContext)}`,
         },
       });
 
@@ -452,17 +469,6 @@ Client context: ${JSON.stringify(clientContext)}`,
       }
       res.end();
 
-      if (getApps().length) {
-        try {
-          const db = getFirestore();
-          const sessionRef = db.collection("conversations").doc(String(sessionId).slice(0, 100));
-          const attachmentMeta = attachment ? { name: attachment.name, mimeType: attachment.mimeType, storagePath: attachment.storagePath, size: attachment.size } : null;
-          await sessionRef.collection("messages").add({ role: "user", text: message, attachment: attachmentMeta, timestamp: FieldValue.serverTimestamp() });
-          await sessionRef.collection("messages").add({ role: "model", text: fullText, timestamp: FieldValue.serverTimestamp() });
-        } catch (dbError) {
-          console.error("Failed to save to Firestore:", dbError);
-        }
-      }
     } catch (error: any) {
       const isRateLimit = error?.status === 429 || String(error?.message || "").includes("429");
       if (!isRateLimit) {
