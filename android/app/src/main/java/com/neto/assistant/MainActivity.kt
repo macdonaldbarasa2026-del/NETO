@@ -24,6 +24,7 @@ import org.json.JSONObject
 class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
   private lateinit var webView: WebView
   private var fileChooser: ValueCallback<Array<Uri>>? = null
+  private var nativeFilePicker = false
   private var recognizer: SpeechRecognizer? = null
   private var tts: TextToSpeech? = null
   private var ttsReady = false
@@ -33,10 +34,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     dispatch("capabilities", NetoAndroidController(this).capabilities())
   }
   private val files = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-    val callback = fileChooser ?: return@registerForActivityResult
+    val callback = fileChooser
+    if (callback == null && !nativeFilePicker) return@registerForActivityResult
     val data = result.data
     val value = if (result.resultCode != RESULT_OK || data == null) null else if (data.clipData != null) Array(data.clipData!!.itemCount) { data.clipData!!.getItemAt(it).uri } else data.data?.let { arrayOf(it) }
-    callback.onReceiveValue(value); fileChooser = null
+    callback?.onReceiveValue(value); fileChooser = null; nativeFilePicker = false; val first = value?.firstOrNull(); dispatch("file", JSONObject().put("state", if (first == null) "cancelled" else "selected").put("count", value?.size ?: 0).put("uri", first?.toString() ?: "").put("mimeType", first?.let { contentResolver.getType(it).orEmpty() } ?: ""))
   }
   @SuppressLint("SetJavaScriptEnabled") override fun onCreate(state: Bundle?) { super.onCreate(state)
     webView = WebView(this); setContentView(webView)
@@ -56,6 +58,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
   fun stopVoice():JSONObject {recognizer?.cancel();recognizer?.destroy();recognizer=null;return NetoAndroidController.successResult("Voice input stopped.")}
   fun speak(text:String,rate:Float):JSONObject {audioManager.requestAudioFocus(focusChange, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);if(!ttsReady||text.isBlank())return NetoAndroidController.failureResult("Android text-to-speech is unavailable.","tts_unavailable");tts?.setSpeechRate(rate.coerceIn(.7f,1.4f));return if(tts?.speak(text.take(8000),TextToSpeech.QUEUE_FLUSH,Bundle(),"neto")==TextToSpeech.ERROR)NetoAndroidController.failureResult("Android text-to-speech could not start.") else NetoAndroidController.successResult("Speaking.")}
   fun stopSpeaking():JSONObject {tts?.stop();audioManager.abandonAudioFocus(focusChange);return NetoAndroidController.successResult("Speech stopped.")}
+  fun openFilePicker(target: String): JSONObject {
+    if (nativeFilePicker) return NetoAndroidController.failureResult("A file picker is already open.", "file_picker_busy")
+    return try { nativeFilePicker = true; files.launch(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")); NetoAndroidController.successResult("Opening ${if (target.contains("download", true)) "Downloads" else "Android's file picker"}.") }
+    catch (_: Exception) { nativeFilePicker = false; NetoAndroidController.failureResult("I couldn't open the file picker.", "file_picker_unavailable") }
+  }
+  fun isTextToSpeechReady()=ttsReady
+  fun isInternetAvailable():Boolean { val manager=getSystemService(CONNECTIVITY_SERVICE) as android.net.ConnectivityManager; val network=manager.activeNetwork ?: return false; val caps=manager.getNetworkCapabilities(network) ?: return false; return caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) }
   fun openAccessibilitySettings()=startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); fun openAppSettings()=startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))); fun has(p:String)=ContextCompat.checkSelfPermission(this,p)==PackageManager.PERMISSION_GRANTED; fun permanentlyDenied(p:String)=getSharedPreferences("neto_permissions", MODE_PRIVATE).getBoolean("requested_"+p, false)&&!has(p)&&!shouldShowRequestPermissionRationale(p)
   fun dispatch(type:String,data:JSONObject){runOnUiThread { if(::webView.isInitialized&&trusted(Uri.parse(webView.url?:""))){val event=JSONObject().put("type",type).put("data",data).toString();webView.evaluateJavascript("window.dispatchEvent(new CustomEvent('neto-native',{detail:JSON.parse("+JSONObject.quote(event)+")}));",null)}}}
   private fun voiceError(e:Int)=when(e){SpeechRecognizer.ERROR_NETWORK,SpeechRecognizer.ERROR_NETWORK_TIMEOUT->"Speech recognition needs a network connection.";SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS->"Allow microphone access to use voice.";SpeechRecognizer.ERROR_NO_MATCH,SpeechRecognizer.ERROR_SPEECH_TIMEOUT->"I did not hear anything. Tap Talk to try again.";else->"Speech recognition failed. Please try again."}

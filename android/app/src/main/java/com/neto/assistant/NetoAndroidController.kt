@@ -36,6 +36,10 @@ class NetoAndroidController(private val activity: MainActivity) {
         put("notifications", if (android.os.Build.VERSION.SDK_INT >= 33) has(Manifest.permission.POST_NOTIFICATIONS) else true)
         put("phone", activity.packageManager.resolveActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:0")), 0) != null)
         put("screenReading", NetoAccessibilityService.instance != null)
+        put("voiceRecognition", android.speech.SpeechRecognizer.isRecognitionAvailable(activity))
+        put("textToSpeech", activity.isTextToSpeechReady())
+        put("internet", activity.isInternetAvailable())
+        put("files", activity.packageManager.resolveActivity(Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*"), 0) != null)
         put("screenCapture", false) // MediaProjection is intentionally not started silently.
         put("sms", true) // compose-only; Android Messages confirms sending.
     }
@@ -44,11 +48,11 @@ class NetoAndroidController(private val activity: MainActivity) {
         if (command.optString("type") != "android_action") return failure("Unsupported command type.")
         val action = command.optString("action")
         if (action !in ALLOWED) return failure("That Android action is not supported.")
-        return when (action) {
+        val outcome = when (action) {
             "open_app" -> openApp(command.optString("target"))
             "open_file" -> openFile(command.optString("target"))
             "open_url" -> openUrl(command.optString("url"))
-            "open_settings" -> { activity.startActivity(Intent(Settings.ACTION_SETTINGS)); success("Opening Android Settings.") }
+            "open_settings" -> openSettings(command.optString("target"))
             "request_capability" -> activity.requestCapability(command.optString("target"))
             "open_accessibility_settings" -> { activity.openAccessibilitySettings(); success("Open NETO Accessibility Service and enable it, then return here.") }
             "open_app_settings" -> { activity.openAppSettings(); success("Opening NETO app settings.") }
@@ -65,6 +69,27 @@ class NetoAndroidController(private val activity: MainActivity) {
             "paste_text" -> accessibility { it.paste() }
             else -> failure("That Android action is not supported.")
         }
+        return outcome.put("action", action)
+    }
+
+    private fun openSettings(target: String): JSONObject {
+        val normalized = target.trim().lowercase(Locale.US)
+        val intent = when (normalized) {
+            "wifi", "wi-fi", "wireless" -> Intent(Settings.ACTION_WIFI_SETTINGS)
+            "bluetooth" -> Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
+            "notifications", "notification" -> Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName)
+            "accessibility" -> Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+            "app", "application" -> Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${activity.packageName}"))
+            "display" -> Intent(Settings.ACTION_DISPLAY_SETTINGS)
+            "sound", "audio" -> Intent(Settings.ACTION_SOUND_SETTINGS)
+            "location" -> Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+            "battery" -> Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS)
+            "date", "time", "date_time" -> Intent(Settings.ACTION_DATE_SETTINGS)
+            "language", "input", "keyboard" -> Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)
+            else -> Intent(Settings.ACTION_SETTINGS)
+        }
+        return try { activity.startActivity(intent); success("Opening ${if (normalized.isBlank()) "Android" else normalized} settings.") }
+        catch (_: Exception) { failure("Android settings are unavailable on this device.") }
     }
 
     private fun openApp(target: String): JSONObject {
@@ -81,11 +106,7 @@ class NetoAndroidController(private val activity: MainActivity) {
         return try { activity.startActivity(intent); success("Opening ${selected.second}.") } catch (_: Exception) { failure("I couldn't open ${selected.second}.") }
     }
 
-    private fun openFile(target: String): JSONObject = try {
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
-        activity.startActivity(Intent.createChooser(intent, if (target.contains("download", true)) "Open a download" else "Open a file"))
-        success("Opening Android's file picker.")
-    } catch (_: Exception) { failure("I couldn't open the file picker.") }
+    private fun openFile(target: String): JSONObject = activity.openFilePicker(target)
 
     private fun openUrl(raw: String): JSONObject {
         val uri = runCatching { Uri.parse(raw) }.getOrNull() ?: return failure("That web address is invalid.")

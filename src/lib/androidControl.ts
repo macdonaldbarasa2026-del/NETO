@@ -15,6 +15,10 @@ const URL_PATTERN = /^https?:\/\/[\w.-]+(?:\/[^\s]*)?$/i;
 /** Local parser: only unambiguous commands are routed to Android. */
 export function parseAndroidCommand(input: string): AndroidCommand | null {
   const text = input.trim().replace(/^neto[,:]?\s*/i, "");
+  const settings = text.match(/^open\s+(wifi|wi-fi|bluetooth|notifications?|accessibility|app(?:lication)?|display|sound|audio|location|battery|date(?:\s*\/?\s*time)?|time|language|input|keyboard)\s+settings?(?:\.|!)*$/i);
+  if (settings) return { type: "android_action", action: "open_settings", target: settings[1].toLowerCase() };
+  const search = text.match(/^search\s+(?:for\s+)?(.+?)(?:\.|!)*$/i);
+  if (search) return { type: "android_action", action: "open_url", url: `https://www.google.com/search?q=${encodeURIComponent(search[1].trim())}` };
   const open = text.match(/^open\s+(?:my\s+)?(.+?)(?:\.|!)*$/i);
   if (open) { const target = open[1].trim(); if (/^(downloads?|files?|documents?)$/i.test(target)) return { type: "android_action", action: "open_file", target }; if (/^settings?$/i.test(target)) return { type: "android_action", action: "open_settings" }; if (URL_PATTERN.test(target)) return { type: "android_action", action: "open_url", url: target }; return { type: "android_action", action: "open_app", target }; }
   if (/^(?:go\s+)?back(?:\.|!)*$/i.test(text)) return { type: "android_action", action: "go_back" };
