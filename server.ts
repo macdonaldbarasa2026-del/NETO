@@ -83,6 +83,179 @@ async function startServer() {
 
   const NETO_VOICE_INSTRUCTIONS = `You are Neto, the AI assistant inside the Neto app. You were created for Neto by Macdonald Barasa. Your product/company identity is Neto. Do not expose the underlying AI provider unless the user explicitly asks about the technical stack. Give brief, immediate conversational replies, normally 1-2 short sentences unless the user asks for detail. Never use markdown in voice replies. Be natural, clear, friendly, and fast.`;
 
+  const NETO_TOOLS = [
+    {
+      name: "open_app",
+      description: "Opens an Android application by name.",
+      parameters: {
+        type: "object",
+        properties: {
+          target: { type: "string", description: "The name of the app to open (e.g., 'Spotify', 'WhatsApp')." }
+        },
+        required: ["target"]
+      }
+    },
+    {
+      name: "open_file",
+      description: "Opens the Android file picker or a specific category like Downloads.",
+      parameters: {
+        type: "object",
+        properties: {
+          target: { type: "string", description: "The category to open (e.g., 'downloads', 'documents', 'files').", enum: ["downloads", "documents", "files"] }
+        }
+      }
+    },
+    {
+      name: "open_url",
+      description: "Opens a web URL in the Android browser.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "The full HTTPS URL to open." }
+        },
+        required: ["url"]
+      }
+    },
+    {
+      name: "open_settings",
+      description: "Opens Android system settings, optionally to a specific section.",
+      parameters: {
+        type: "object",
+        properties: {
+          target: { type: "string", description: "The settings section to open.", enum: ["wifi", "bluetooth", "notifications", "accessibility", "display", "sound", "location", "battery", "date", "language"] }
+        }
+      }
+    },
+    {
+      name: "make_call",
+      description: "Prepares a phone call to a contact or number. User must confirm in the dialer.",
+      parameters: {
+        type: "object",
+        properties: {
+          target: { type: "string", description: "The contact name or phone number." }
+        },
+        required: ["target"]
+      }
+    },
+    {
+      name: "compose_sms",
+      description: "Prepares an SMS message to a contact or number. User must confirm sending.",
+      parameters: {
+        type: "object",
+        properties: {
+          target: { type: "string", description: "The contact name or phone number." },
+          text: { type: "string", description: "The message body." }
+        },
+        required: ["target", "text"]
+      }
+    },
+    {
+      name: "read_screen",
+      description: "Reads the visible text on the current Android screen using accessibility services.",
+      parameters: { type: "object", properties: {} }
+    },
+    {
+      name: "type_text",
+      description: "Types text into the currently focused input field on Android.",
+      parameters: {
+        type: "object",
+        properties: {
+          text: { type: "string", description: "The text to type." }
+        },
+        required: ["text"]
+      }
+    },
+    {
+      name: "tap",
+      description: "Taps a named element on the Android screen.",
+      parameters: {
+        type: "object",
+        properties: {
+          target: { type: "string", description: "The name or text of the element to tap." }
+        },
+        required: ["target"]
+      }
+    },
+    {
+      name: "scroll",
+      description: "Scrolls the current Android screen in a direction.",
+      parameters: {
+        type: "object",
+        properties: {
+          direction: { type: "string", description: "The direction to scroll.", enum: ["up", "down", "left", "right"] }
+        },
+        required: ["direction"]
+      }
+    },
+    {
+      name: "go_back",
+      description: "Performs the Android global 'Back' action.",
+      parameters: { type: "object", properties: {} }
+    },
+    {
+      name: "go_home",
+      description: "Performs the Android global 'Home' action.",
+      parameters: { type: "object", properties: {} }
+    },
+    {
+      name: "copy_text",
+      description: "Copies text to the Android clipboard.",
+      parameters: {
+        type: "object",
+        properties: {
+          text: { type: "string", description: "The text to copy." }
+        },
+        required: ["text"]
+      }
+    },
+    {
+      name: "request_capability",
+      description: "Requests an Android permission or capability (e.g., microphone).",
+      parameters: {
+        type: "object",
+        properties: {
+          target: { type: "string", description: "The capability to request.", enum: ["microphone", "camera", "contacts", "notifications", "accessibility"] }
+        },
+        required: ["target"]
+      }
+    },
+    {
+      name: "list_apps",
+      description: "Lists launchable Android applications installed on the user's device.",
+      parameters: { type: "object", properties: {} }
+    },
+    {
+      name: "search_contacts",
+      description: "Finds contacts or phone numbers on the user's Android device. Returns choices when more than one matches.",
+      parameters: { type: "object", properties: { query: { type: "string", description: "The contact name or number to search for." } }, required: ["query"] }
+    },
+    {
+      name: "long_press",
+      description: "Long-presses a named visible Android screen element through the enabled accessibility service.",
+      parameters: { type: "object", properties: { target: { type: "string", description: "Visible text or label of the element." } }, required: ["target"] }
+    },
+    {
+      name: "swipe",
+      description: "Swipes the current Android screen in a direction through the enabled accessibility service.",
+      parameters: { type: "object", properties: { direction: { type: "string", enum: ["up", "down", "left", "right"] } }, required: ["direction"] }
+    },
+    {
+      name: "paste_text",
+      description: "Pastes the Android clipboard into the focused field through the enabled accessibility service.",
+      parameters: { type: "object", properties: {} }
+    },
+    {
+      name: "open_accessibility_settings",
+      description: "Opens Android Accessibility Settings so the user can enable NETO Accessibility Service.",
+      parameters: { type: "object", properties: {} }
+    },
+    {
+      name: "open_app_settings",
+      description: "Opens the NETO app's Android settings page.",
+      parameters: { type: "object", properties: {} }
+    },
+  ];
+
   function resamplePcm16Base64(base64: string, fromRate: number, toRate: number) {
     if (fromRate === toRate) return base64;
     const input = Buffer.from(base64, "base64");
@@ -288,13 +461,16 @@ async function startServer() {
   // Chat API stream route. Normal uses Gemini. Pro uses OpenAI.
   app.post("/api/chat-stream", rateLimitChat, async (req, res) => {
     try {
-      const { message, history = [], clientContext = {}, attachment = null, mode = "normal" } = req.body || {};
+      const { message, history = [], clientContext = {}, attachment = null, toolResults = [], mode = "normal" } = req.body || {};
       if (typeof message !== "string" || message.length > 12_000) return res.status(400).json({ error: "Message must be text shorter than 12,000 characters." });
       if (mode !== "normal" && mode !== "pro") return res.status(400).json({ error: "Unsupported AI mode." });
       const safeHistory = (Array.isArray(history) ? history : []).slice(-12).map((item: any) => ({
         role: item?.role === "model" ? "model" : "user",
         parts: [{ text: Array.isArray(item?.parts) ? item.parts.map((part: any) => typeof part?.text === "string" ? part.text : "").join("\n").slice(0, 6_000) : "" }],
       })).filter((item) => item.parts[0].text);
+      const safeToolResults = Array.isArray(toolResults) ? toolResults.slice(0, 4).map((item: any) => ({ name: typeof item?.name === "string" ? item.name.slice(0, 80) : "android_action", result: item?.result && typeof item.result === "object" ? item.result : { ok: false, code: "ANDROID_ACTION_FAILED", message: "No Android result was returned." } })) : [];
+      const isToolResult = safeToolResults.length > 0;
+      const toolResultText = isToolResult ? `Android tool result(s), already executed: ${JSON.stringify(safeToolResults)}. Explain the result naturally; do not execute another action unless the user makes a new request.` : "";
       const safeAttachment = attachment && typeof attachment === "object" ? {
         name: typeof attachment.name === "string" ? attachment.name.slice(0, 160) : "attachment",
         mimeType: typeof attachment.mimeType === "string" ? attachment.mimeType.slice(0, 128) : "application/octet-stream",
@@ -322,7 +498,7 @@ async function startServer() {
           })).filter((item) => item.content)
         ];
 
-        const userText = message || (safeAttachment?.mimeType.startsWith("image/") ? "Please analyze the attached image." : "Please analyze the attached file.");
+        const userText = isToolResult ? toolResultText : message || (safeAttachment?.mimeType.startsWith("image/") ? "Please analyze the attached image." : "Please analyze the attached file.");
         const userContent: any[] = [{ type: "text", text: userText }];
         if (safeAttachment?.text) userContent.push({ type: "text", text: `Attached file ${safeAttachment.name} contains:\n${safeAttachment.text}` });
 
@@ -346,18 +522,28 @@ async function startServer() {
         openAiMessages.push({ role: "user", content: userContent });
 
         let openAiModel = process.env.OPENAI_PRO_MODEL || "gpt-4o-mini";
+        const openAiTools = NETO_TOOLS.map(t => ({
+          type: "function",
+          function: {
+            name: t.name,
+            description: t.description,
+            parameters: t.parameters
+          }
+        }));
+
         let openAiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
-          body: JSON.stringify({ model: openAiModel, messages: openAiMessages, stream: true })
+          body: JSON.stringify({ model: openAiModel, messages: openAiMessages, tools: isToolResult || !safeClientContext.nativeCapabilities ? undefined : openAiTools, tool_choice: isToolResult || !safeClientContext.nativeCapabilities ? "none" : "auto", stream: true })
         });
+
         if (!openAiResponse.ok && openAiModel !== "gpt-4o-mini") {
           console.warn(`Pro API error with model ${openAiModel}, retrying with gpt-4o-mini...`);
           openAiModel = "gpt-4o-mini";
           openAiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
             method: "POST",
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
-            body: JSON.stringify({ model: openAiModel, messages: openAiMessages, stream: true })
+            body: JSON.stringify({ model: openAiModel, messages: openAiMessages, tools: isToolResult || !safeClientContext.nativeCapabilities ? undefined : openAiTools, tool_choice: isToolResult || !safeClientContext.nativeCapabilities ? "none" : "auto", stream: true })
           });
         }
         if (!openAiResponse.ok) {
@@ -373,6 +559,8 @@ async function startServer() {
         const reader = openAiResponse.body?.getReader();
         const decoder = new TextDecoder();
         let pending = "";
+        const toolCalls: any[] = [];
+
         if (reader) {
           while (true) {
             const { done, value } = await reader.read();
@@ -385,9 +573,33 @@ async function startServer() {
               const payload = line.slice(6).trim();
               if (payload === "[DONE]") continue;
               try {
-                const delta = JSON.parse(payload)?.choices?.[0]?.delta?.content;
-                if (delta) { fullText += delta; res.write(delta); }
+                const json = JSON.parse(payload);
+                const delta = json?.choices?.[0]?.delta;
+
+                if (delta?.content) {
+                  fullText += delta.content;
+                  res.write(delta.content);
+                }
+
+                if (delta?.tool_calls) {
+                  for (const tc of delta.tool_calls) {
+                    if (!toolCalls[tc.index]) toolCalls[tc.index] = { id: tc.id, name: "", arguments: "" };
+                    if (tc.function?.name) toolCalls[tc.index].name += tc.function.name;
+                    if (tc.function?.arguments) toolCalls[tc.index].arguments += tc.function.arguments;
+                  }
+                }
               } catch {}
+            }
+          }
+        }
+
+        for (const tc of toolCalls) {
+          if (tc && tc.name) {
+            try {
+              const args = JSON.parse(tc.arguments || "{}");
+              res.write(`__NETO_TOOL_CALL__:${JSON.stringify({ id: tc.id, name: tc.name, arguments: args })}\n`);
+            } catch (e) {
+              console.error("Error parsing tool call arguments:", e);
             }
           }
         }
@@ -397,7 +609,7 @@ async function startServer() {
       }
 
       if (!ai) return res.status(503).json({ error: "Normal service is not configured" });
-      const userParts: any[] = [{ text: message || (safeAttachment?.mimeType.startsWith("image/") ? "Please analyze the attached image." : "Please analyze the attached file.") }];
+      const userParts: any[] = [{ text: isToolResult ? toolResultText : message || (safeAttachment?.mimeType.startsWith("image/") ? "Please analyze the attached image." : "Please analyze the attached file.") }];
 
       if (safeAttachment?.text) {
         userParts.push({ text: `Attached file ${safeAttachment.name} contains:\n${safeAttachment.text}` });
@@ -435,7 +647,29 @@ async function startServer() {
         model: "gemini-3.1-flash",
         contents,
         config: {
-          tools: [{ googleSearch: {} }],
+          tools: isToolResult || !safeClientContext.nativeCapabilities ? [{ googleSearch: {} }] : [
+            { googleSearch: {} },
+            {
+              functionDeclarations: NETO_TOOLS.map(t => ({
+                name: t.name,
+                description: t.description,
+                parameters: {
+                  type: t.parameters.type.toUpperCase() as any,
+                  properties: Object.fromEntries(
+                    Object.entries(t.parameters.properties).map(([k, v]: [string, any]) => [
+                      k,
+                      {
+                        type: v.type.toUpperCase() as any,
+                        description: v.description,
+                        enum: v.enum
+                      }
+                    ])
+                  ),
+                  required: t.parameters.required
+                }
+              }))
+            }
+          ],
           systemInstruction: `You are Neto, the AI assistant inside the Neto app.
 Identity rules:
 - Your name is Neto.
@@ -446,6 +680,7 @@ Identity rules:
 - If asked who created you or the app, answer: "I was created for Neto by Macdonald Barasa."
 - Do not invent biography, location, contact details, social links, achievements, ownership, or company history for Macdonald Barasa.
 - Be honest about capabilities. You can analyze text, images, and supported PDF attachments supplied by the app. You also have access to Google Search for finding real-time information.
+- Android device actions are available only when client context nativeCapabilities is true. If it is false, explain that NETO Android control is available only in the NETO Android app.
 Conversation rules:
 - Answer text messages normally and directly. Never require voice input for a text question.
 - Keep replies concise by default, but give detail when requested.
@@ -455,16 +690,24 @@ Installation awareness:
 - If installed is false and the user asks to install, explain that the app's Install button or browser Add to Home Screen/Install option should be used.
 - Never falsely claim installation succeeded.
 Device action policy:
-- Never claim to execute a device action. The user must explicitly initiate and confirm supported actions in the Device screen.
+- When nativeCapabilities is true and this is not a tool-result follow-up, use the appropriate tool for a device action. A message beginning "[Tool Result for" is the result of an Android action: explain it naturally and do not request another tool.
+- For ambiguous requests (e.g., multiple contact matches), use the tool results to ask the user for clarification.
 Client context: ${JSON.stringify(safeClientContext)}`,
         },
       });
 
-      let fullText = "";
       for await (const chunk of responseStream) {
         if (chunk.text) {
-          fullText += chunk.text;
           res.write(chunk.text);
+        }
+        const functionCalls = chunk.candidates?.[0]?.content?.parts?.filter(p => p.functionCall);
+        if (functionCalls) {
+          for (const part of functionCalls) {
+            const fc = part.functionCall;
+            if (fc) {
+              res.write(`__NETO_TOOL_CALL__:${JSON.stringify({ name: fc.name, arguments: fc.args })}\n`);
+            }
+          }
         }
       }
       res.end();

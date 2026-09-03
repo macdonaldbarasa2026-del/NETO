@@ -18,7 +18,7 @@ import java.util.Locale
  */
 class NetoAndroidController(private val activity: MainActivity) {
     companion object {
-        private val ALLOWED = setOf("open_app", "open_file", "open_url", "open_settings", "make_call", "compose_sms", "read_screen", "type_text", "tap", "long_press", "scroll", "swipe", "go_back", "go_home", "copy_text", "paste_text", "request_capability", "open_accessibility_settings", "open_app_settings")
+        private val ALLOWED = setOf("open_app", "open_file", "open_url", "open_settings", "make_call", "compose_sms", "read_screen", "type_text", "tap", "long_press", "scroll", "swipe", "go_back", "go_home", "copy_text", "paste_text", "request_capability", "open_accessibility_settings", "open_app_settings", "search_contacts", "list_apps")
         fun result(ok: Boolean, message: String, choices: List<String> = emptyList(), code: String? = null): String = JSONObject().put("ok", ok).put("message", message).put("choices", JSONArray(choices)).apply { if (code != null) put("code", code) }.toString()
         fun successResult(message: String) = JSONObject(result(true, message))
         fun failureResult(message: String, code: String? = null) = JSONObject(result(false, message, code = code))
@@ -67,6 +67,8 @@ class NetoAndroidController(private val activity: MainActivity) {
             "go_home" -> accessibility { it.globalHome() }
             "copy_text" -> accessibility { it.copy(command.optString("text")) }
             "paste_text" -> accessibility { it.paste() }
+            "search_contacts" -> searchContacts(command.optString("query"))
+            "list_apps" -> listApps()
             else -> failure("That Android action is not supported.")
         }
         return outcome.put("action", action)
@@ -127,6 +129,19 @@ class NetoAndroidController(private val activity: MainActivity) {
         return try { activity.startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:${Uri.encode(resolved.numbers.first())}")).putExtra("sms_body", text)); success("Message prepared for ${resolved.name}. Confirm sending in Android Messages.") } catch (_: Exception) { failure("I couldn't prepare that message.") }
     }
 
+    private fun searchContacts(query: String): JSONObject {
+        if (query.length !in 1..80) return failure("Please provide a contact name or number.")
+        if (!has(Manifest.permission.READ_CONTACTS)) { activity.requestCapability("contacts"); return failure("Contacts permission is required.") }
+        val results = mutableListOf<String>()
+        activity.contentResolver.query(ContactsContract.CommonDataKinds.Phone.CONTENT_URI, arrayOf(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME, ContactsContract.CommonDataKinds.Phone.NUMBER), "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ? OR ${ContactsContract.CommonDataKinds.Phone.NUMBER} LIKE ?", arrayOf("%$query%", "%$query%"), "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} ASC")?.use { cursor -> while (cursor.moveToNext()) results += "${cursor.getString(0)}: ${cursor.getString(1)}" }
+        return if (results.isEmpty()) failure("No contacts found for $query.") else JSONObject(result(true, "Found ${results.size} contact result(s).", results.distinct()))
+    }
+
+    private fun listApps(): JSONObject {
+        val query = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val apps = activity.packageManager.queryIntentActivities(query, 0).filter { it.activityInfo.packageName != activity.packageName }.map { it.loadLabel(activity.packageManager).toString() }.distinct().sortedWith(String.CASE_INSENSITIVE_ORDER)
+        return JSONObject(result(true, "Found ${apps.size} installed apps.", apps))
+    }
     private data class Contact(val name: String, val numbers: List<String>)
     private fun resolveContact(target: String): Contact? {
         if (target.matches(Regex("^[+0-9() -]{3,32}$"))) return Contact(target, listOf(target))

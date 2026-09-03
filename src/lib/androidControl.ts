@@ -1,12 +1,24 @@
 export type AndroidAction =
-  | "open_app" | "open_file" | "open_url" | "open_settings" | "make_call"
+  | "open_app" | "list_apps" | "search_contacts" | "open_file" | "open_url" | "open_settings" | "make_call"
   | "compose_sms" | "read_screen" | "type_text" | "tap" | "long_press"
   | "scroll" | "swipe" | "go_back" | "go_home" | "copy_text" | "paste_text"
   | "request_capability" | "open_accessibility_settings" | "open_app_settings";
 
-export type AndroidCommand = { type: "android_action"; action: AndroidAction; target?: string; text?: string; url?: string; direction?: "up" | "down" | "left" | "right" };
-export type AndroidResult = { ok: boolean; message: string; needsConfirmation?: boolean; choices?: string[]; code?: string };
+export type AndroidCommand = { type: "android_action"; action: AndroidAction; target?: string; query?: string; text?: string; url?: string; direction?: "up" | "down" | "left" | "right" };
+export type AndroidChoice = { label: string; value: string; detail?: string };
+export type AndroidResult = { ok: boolean; action?: AndroidAction; message: string; needsConfirmation?: boolean; choices?: AndroidChoice[]; code?: string };
 export type AndroidCapabilities = Record<string, boolean | string | undefined>;
+
+/** Public contract for the single native bridge, window.NetoNative. */
+export const ANDROID_ACTIONS: readonly AndroidAction[] = [
+  "open_app", "list_apps", "search_contacts", "open_file", "open_url", "open_settings", "make_call", "compose_sms",
+  "read_screen", "type_text", "tap", "long_press", "scroll", "swipe", "go_back", "go_home", "copy_text", "paste_text",
+  "request_capability", "open_accessibility_settings", "open_app_settings",
+] as const;
+
+export function isAndroidAction(value: unknown): value is AndroidAction {
+  return typeof value === "string" && (ANDROID_ACTIONS as readonly string[]).includes(value);
+}
 
 declare global { interface Window { NetoNative?: { execute(command: string): string; getCapabilityStatus?(): string; startVoice?(language: string): string; stopVoice?(): string; speak?(text: string, rate: number): string; stopSpeaking?(): string } } }
 
@@ -35,7 +47,7 @@ export function parseAndroidCommand(input: string): AndroidCommand | null {
 }
 
 export function executeAndroidCommand(command: AndroidCommand): AndroidResult | null {
-  if (!window.NetoNative) return null;
+  if (!window.NetoNative) return { ok: false, code: "BRIDGE_UNAVAILABLE", message: "Android control is available in the NETO Android app only." };
   try { const result = JSON.parse(window.NetoNative.execute(JSON.stringify(command))); return typeof result?.ok === "boolean" && typeof result?.message === "string" ? result : { ok: false, message: "NETO could not complete that Android action." }; }
   catch { return { ok: false, message: "NETO could not complete that Android action." }; }
 }

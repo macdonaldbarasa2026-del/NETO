@@ -3,9 +3,9 @@
  * Creator: Macdonald Barasa
  */
 import { useState, useEffect, useRef, useCallback, useMemo, type CSSProperties, type ReactNode } from "react";
-import { Menu, Settings, Plus, Clock, Mic, MicOff, X, Send, Volume2, VolumeX, Download, UserRound, ArrowLeft, ImagePlus, Trash2, Search, Smartphone, ExternalLink, Copy, RotateCcw, Square } from "lucide-react";
+import { Menu, Settings, Plus, Clock, Mic, MicOff, X, Send, Volume2, VolumeX, Download, UserRound, ArrowLeft, ImagePlus, Trash2, Search, Smartphone, ExternalLink, Copy, RotateCcw, Square, WifiOff } from "lucide-react";
 import { uploadAttachment, signInWithGoogle, logout, onAuthChange, saveConversation, loadRecentConversations, clearAllConversations } from "./lib/firebase";
-import { executeAndroidCommand, getAndroidCapabilities, parseAndroidCommand, type AndroidAction, type AndroidCommand, type AndroidCapabilities } from "./lib/androidControl";
+import { executeAndroidCommand, getAndroidCapabilities, isAndroidAction, type AndroidAction, type AndroidCommand, type AndroidCapabilities } from "./lib/androidControl";
 
 type Status = "idle" | "listening" | "thinking" | "speaking";
 type Theme = "light" | "dark" | "midnight" | "warm" | "contrast";
@@ -102,7 +102,12 @@ export default function App() {
   const [manualInstallInfo, setManualInstallInfo] = useState<{ platform: string; steps: string[] } | null>(null);
   const [nativeActionStatus, setNativeActionStatus] = useState("");
   const [androidCapabilities, setAndroidCapabilities] = useState<AndroidCapabilities | null>(null);
+  const [isOnline, setIsOnline] = useState(() => navigator.onLine);
+  const [offlineNoticeOpen, setOfflineNoticeOpen] = useState(() => !navigator.onLine);
+  const [permissionPromptOpen, setPermissionPromptOpen] = useState(false);
+  const [permissionMessage, setPermissionMessage] = useState("");
   const nativeVoiceHandlerRef = useRef<(text: string) => void>(() => {});
+  const failedRequestRef = useRef<{ text: string; attachment: ImageAttachment | null; speakResponse: boolean } | null>(null);
   const nativeAvailable = typeof window !== "undefined" && !!window.NetoNative;
 
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
@@ -133,7 +138,7 @@ export default function App() {
     const onNative = (event: Event) => {
       const detail = (event as CustomEvent).detail;
       if (!detail?.data) return;
-      if (detail.type === "capabilities") { setAndroidCapabilities(detail.data); return; }
+      if (detail.type === "capabilities") { setAndroidCapabilities(detail.data); if (detail.data.microphone) setPermissionPromptOpen(false); return; }
       if (detail.type === "voice") {
         const data = detail.data;
         if (data.state === "partial") { transcriptRef.current = data.text || ""; setTranscript(data.text || ""); setStatus("listening"); }
@@ -149,6 +154,29 @@ export default function App() {
     window.addEventListener("neto-native", onNative);
     window.addEventListener("focus", refresh);
     return () => { window.removeEventListener("neto-native", onNative); window.removeEventListener("focus", refresh); };
+  }, []);
+
+  useEffect(() => {
+    const updateNetwork = () => {
+      const online = navigator.onLine;
+      setIsOnline(online);
+      setOfflineNoticeOpen(!online);
+      if (online) setTranscript("Back online. You can continue.");
+    };
+    window.addEventListener("online", updateNetwork);
+    window.addEventListener("offline", updateNetwork);
+    return () => { window.removeEventListener("online", updateNetwork); window.removeEventListener("offline", updateNetwork); };
+  }, []);
+
+  // Ask only for the microphone, which is needed for Neto's core voice feature.
+  // Android controls the system dialog; browsers show their own prompt.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const capabilities = getAndroidCapabilities();
+      if (capabilities && !capabilities.microphone) setPermissionPromptOpen(true);
+      else if (!capabilities && navigator.mediaDevices?.getUserMedia) setPermissionPromptOpen(true);
+    }, 650);
+    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
@@ -448,14 +476,14 @@ export default function App() {
     }
   }, [aiMode, captionsEnabled, disconnectLive, isMicMuted, language, playLivePcm, stopAmbient, voiceMode]);
 
-  
+
   const exportConversation = useCallback((format: 'txt' | 'json') => {
     if (chatHistory.length === 0) return;
-    
+
     let content = "";
     let mimeType = "";
     let extension = "";
-    
+
     if (format === 'txt') {
       content = chatHistory.map(m => `${m.role === 'user' ? 'You' : 'Neto'}:\n${m.parts[0].text}`).join('\n\n');
       mimeType = 'text/plain';
@@ -465,7 +493,7 @@ export default function App() {
       mimeType = 'application/json';
       extension = 'json';
     }
-    
+
     const blob = new Blob([content], { type: mimeType });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -492,7 +520,7 @@ export default function App() {
     requestAbortRef.current?.abort(); requestAbortRef.current = null;
     window.speechSynthesis?.cancel();
     try { window.NetoNative?.stopVoice?.(); window.NetoNative?.stopSpeaking?.(); } catch {}
-    
+
     disconnectLive();
     playbackTimeRef.current = 0;
     speakingRef.current = false;
@@ -530,15 +558,20 @@ export default function App() {
     window.speechSynthesis?.speak(utterance);
   }), [isMuted, speed, pickVoice, startAmbient, stopAmbient]);
 
-  const handleMessage = useCallback(async (text: string, attachment?: ImageAttachment | null, speakResponse = false) => {
-    if (!text.trim()) return;
-    
-    // Do not call stopEverything() here. We want text and voice to "branch" 
-    // and run in parallel without "pollution collision"
-    
-    setChatHistory(prev => [...prev, { role: "user", parts: [{ text: attachment ? `${text || "Image attached"} [${attachment.name}]` : text }] }]);
+  const handleMessage = useCallback(async (text: string, attachment?: ImageAttachment | null, speakResponse = false, toolResults?: { name: string; result: unknown }[]) => {
+    if (!text.trim() && !toolResults?.length) return;
+    if (!navigator.onLine) {
+      failedRequestRef.current = { text, attachment: attachment || null, speakResponse };
+      setOfflineNoticeOpen(true);
+      setTranscript("Oops, you're offline. Please check your internet connection and try again.");
+      return;
+    }
 
-    if (!attachment && window.NetoNative) { const command = parseAndroidCommand(text); if (command) { setStatus("thinking"); const result = executeAndroidCommand(command); const reply = result?.message || "NETO could not complete that Android action."; setNativeActionStatus(reply); setChatHistory(prev => [...prev, { role: "model", parts: [{ text: reply }] }]); setStatus("idle"); void speakSentence(reply); return; } }
+    // Do not call stopEverything() here. We want text and voice to "branch"
+    // and run in parallel without "pollution collision"
+
+    if (!toolResults?.length) setChatHistory(prev => [...prev, { role: "user", parts: [{ text: attachment ? `${text || "Image attached"} [${attachment.name}]` : text }] }]);
+
     const controller = new AbortController(); requestAbortRef.current = controller;
     const clientContext = {
       creator: CREATOR,
@@ -546,8 +579,10 @@ export default function App() {
       installed: isInstalled,
       canOfferInstallPrompt: !!installPrompt,
       platform: navigator.platform,
+      nativeCapabilities: !!window.NetoNative,
       theme,
       mode: aiMode,
+      toolResultFollowUp: !!toolResults?.length,
     };
     try {
       const response = await fetch("/api/chat-stream", {
@@ -564,6 +599,7 @@ export default function App() {
             text: attachment.text || null,
           } : null,
           clientContext,
+          toolResults: toolResults || [],
           mode: aiMode,
         }),
       });
@@ -574,18 +610,96 @@ export default function App() {
       }
       const reader = response.body?.getReader(); const decoder = new TextDecoder();
       let fullResponse = "";
+      let pendingToolCall: { name: string; arguments: any; id?: string } | null = null;
+
       if (reader) {
+        let buffer = "";
         while (true) {
           const { done, value } = await reader.read(); if (done) break;
-          fullResponse += decoder.decode(value, { stream: true });
+          const chunk = decoder.decode(value, { stream: true });
+          buffer += chunk;
+
+          const parts = buffer.split("__NETO_TOOL_CALL__:");
+          if (parts.length > 1) {
+            // Text before the first tool call
+            if (parts[0]) {
+              fullResponse += parts[0];
+              setChatHistory(prev => {
+                const last = prev[prev.length - 1];
+                if (last && last.role === "model") {
+                  return [...prev.slice(0, -1), { ...last, parts: [{ text: fullResponse }] }];
+                }
+                return [...prev, { role: "model", parts: [{ text: fullResponse }] }];
+              });
+            }
+
+            // Process tool calls
+            for (let i = 1; i < parts.length; i++) {
+              const remaining = parts[i];
+              const newlineIndex = remaining.indexOf("\n");
+              if (newlineIndex !== -1) {
+                const jsonStr = remaining.slice(0, newlineIndex);
+                try {
+                  pendingToolCall = JSON.parse(jsonStr);
+                  buffer = remaining.slice(newlineIndex + 1);
+                } catch (e) {
+                  console.error("Tool call parse error", e);
+                }
+              } else {
+                // Wait for the rest of the JSON
+                buffer = "__NETO_TOOL_CALL__:" + remaining;
+                break;
+              }
+            }
+          } else {
+            fullResponse += chunk;
+            setChatHistory(prev => {
+              const last = prev[prev.length - 1];
+              if (last && last.role === "model") {
+                return [...prev.slice(0, -1), { ...last, parts: [{ text: fullResponse }] }];
+              }
+              return [...prev, { role: "model", parts: [{ text: fullResponse }] }];
+            });
+            buffer = "";
+          }
         }
       }
-      setChatHistory(prev => [...prev, { role: "model", parts: [{ text: fullResponse }] }]);
-      if (fullResponse.trim() && (voiceMode || speakResponse)) void speakSentence(fullResponse);
+
+      if (pendingToolCall) {
+        setStatus("thinking");
+        setNativeActionStatus(`Executing ${pendingToolCall.name}...`);
+
+
+        const action = isAndroidAction(pendingToolCall.name) ? pendingToolCall.name : undefined;
+        if (action) {
+          const result = executeAndroidCommand({
+            type: "android_action",
+            action,
+            ...pendingToolCall.arguments
+          });
+
+          const resultMessage = result?.message || "Tool execution failed.";
+          setNativeActionStatus(resultMessage);
+
+          void handleMessage("", null, speakResponse, [{ name: pendingToolCall.name, result }]);
+        } else {
+          setNativeActionStatus(`Unknown tool: ${pendingToolCall.name}`);
+          setStatus("idle");
+        }
+      } else {
+        if (fullResponse.trim() && (voiceMode || speakResponse)) void speakSentence(fullResponse);
+        setStatus("idle");
+      }
     } catch (error: any) {
       if (error?.name !== "AbortError") {
-        const errorMessage = error?.message || "Sorry, I couldn't reach the AI service.";
-        setChatHistory(prev => [...prev, { role: "model", parts: [{ text: `[Error: ${errorMessage}]` }] }]);
+        if (error instanceof TypeError) {
+          failedRequestRef.current = { text, attachment: attachment || null, speakResponse };
+          setOfflineNoticeOpen(true);
+          setTranscript("Oops, your connection was lost. Please check your internet connection and try again.");
+        } else {
+          const errorMessage = error?.message || "NETO is having trouble connecting to the server.";
+          setChatHistory(prev => [...prev, { role: "model", parts: [{ text: `[Error: ${errorMessage}]` }] }]);
+        }
       }
     } finally { requestAbortRef.current = null; }
   }, [aiMode, chatHistory, isInstalled, installPrompt, speakSentence, theme, voiceMode]);
@@ -662,6 +776,22 @@ export default function App() {
     setNativeActionStatus(result?.message || "NETO could not complete that device action.");
     window.setTimeout(refreshAndroidCapabilities, 250);
   }, [refreshAndroidCapabilities]);
+
+  const requestMicrophonePermission = useCallback(async () => {
+    setPermissionMessage("");
+    if (window.NetoNative) {
+      runNativeAction("request_capability", { target: "microphone" });
+      setPermissionMessage("Use the Android permission prompt to allow Microphone.");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(track => track.stop());
+      setPermissionPromptOpen(false);
+    } catch {
+      setPermissionMessage("Microphone access is blocked. Open your browser or app settings and allow it to use voice.");
+    }
+  }, [runNativeAction]);
 
   const copyLastResponse = useCallback(async () => {
     const message = [...chatHistory].reverse().find(item => item.role === "model")?.parts[0]?.text;
@@ -830,6 +960,29 @@ export default function App() {
           <button aria-label="End conversation" onClick={()=>setEndConfirmOpen(true)} className="w-12 h-12 sm:w-[52px] sm:h-[52px] rounded-full text-white flex items-center justify-center shadow-md shrink-0 active:scale-95 transition-transform" style={{background:"var(--text)"}}><X className="w-5 h-5"/></button>
         </div>
       </div>
+      <Overlay open={offlineNoticeOpen} onClose={()=>{ if (isOnline) setOfflineNoticeOpen(false); }} bottom>
+        <div className="mx-auto max-w-[560px] px-6 pt-5 pb-[max(24px,env(safe-area-inset-bottom))] text-center">
+          <div className="mx-auto w-14 h-14 rounded-full flex items-center justify-center" style={{background:"rgba(239,68,68,.12)",color:"#dc2626"}}><WifiOff className="w-7 h-7"/></div>
+          <h3 className="text-lg font-semibold mt-4">Oops, you’re offline</h3>
+          <p className="text-sm mt-2 leading-relaxed" style={{color:"var(--muted)"}}>Check your internet connection, then try again. Neto’s saved app screen remains available while you reconnect.</p>
+          <div className="grid grid-cols-2 gap-2 mt-6">
+            {nativeAvailable && <button onClick={()=>runNativeAction("open_settings", {target:"wifi"})} className="h-12 rounded-full border font-semibold" style={{borderColor:"var(--border)",background:"var(--surface)"}}>Wi-Fi settings</button>}
+            <button onClick={()=>{ if (!navigator.onLine) { setTranscript("Still offline — check Wi-Fi or mobile data."); return; } const retry = failedRequestRef.current; failedRequestRef.current = null; setOfflineNoticeOpen(false); setTranscript("Back online. You can continue."); if (retry) void handleMessage(retry.text, retry.attachment, retry.speakResponse); }} className={`${nativeAvailable ? "" : "col-span-2"} h-12 rounded-full text-white font-semibold`} style={{background:"var(--accent)"}}>Try again</button>
+          </div>
+        </div>
+      </Overlay>
+
+      <Overlay open={permissionPromptOpen} onClose={()=>setPermissionPromptOpen(false)} bottom>
+        <div className="mx-auto max-w-[560px] px-6 pt-5 pb-[max(24px,env(safe-area-inset-bottom))] text-center">
+          <div className="mx-auto w-14 h-14 rounded-full flex items-center justify-center" style={{background:"var(--accent-soft)",color:"var(--accent)"}}><Mic className="w-7 h-7"/></div>
+          <h3 className="text-lg font-semibold mt-4">Allow microphone access?</h3>
+          <p className="text-sm mt-2 leading-relaxed" style={{color:"var(--muted)"}}>Neto uses the microphone only when you tap the orb to speak. Your phone will show the official permission prompt.</p>
+          {permissionMessage && <p role="status" className="mt-3 text-xs leading-relaxed" style={{color:"#dc2626"}}>{permissionMessage}</p>}
+          <button onClick={()=>void requestMicrophonePermission()} className="mt-6 w-full h-12 rounded-full text-white font-semibold" style={{background:"var(--accent)"}}>Allow microphone</button>
+          {nativeAvailable && <button onClick={()=>runNativeAction("open_app_settings")} className="mt-2 w-full h-11 rounded-full text-sm font-semibold border" style={{borderColor:"var(--border)",background:"var(--surface)"}}>Open app settings</button>}
+          <button onClick={()=>setPermissionPromptOpen(false)} className="mt-2 w-full h-10 rounded-full text-sm" style={{color:"var(--muted)"}}>Not now</button>
+        </div>
+      </Overlay>
 
       <Overlay open={menuOpen} onClose={()=>closePanel(setMenuOpen)} side>
         <div className="px-7 pt-[max(24px,env(safe-area-inset-top))] pb-6 border-b" style={{borderColor:"var(--border)"}}><div className="w-10 h-10 rounded-full mb-4" style={{background:"linear-gradient(180deg,var(--orb-top),var(--orb-bottom))"}}/><h2 className="text-lg font-semibold">Neto</h2><p className="text-sm mt-1" style={{color:"var(--muted)"}}>Voice-first AI assistant</p></div>
@@ -886,13 +1039,13 @@ export default function App() {
             <section>
               <label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Input Language</label>
               <div className="mt-3 relative">
-                <select 
-                  value={language} 
+                <select
+                  value={language}
                   onChange={(e) => {
                     setLanguage(e.target.value);
                     localStorage.setItem("voice-orb-lang", e.target.value);
                   }}
-                  className="w-full h-12 px-4 rounded-xl border appearance-none text-sm font-medium outline-none focus:ring-2 focus:ring-black/5" 
+                  className="w-full h-12 px-4 rounded-xl border appearance-none text-sm font-medium outline-none focus:ring-2 focus:ring-black/5"
                   style={{background:"var(--surface)",borderColor:"var(--border)", color:"var(--text)"}}
                 >
                   <option value="en-US">English (US)</option>
@@ -1052,20 +1205,20 @@ function Action({ icon, text, onClick, disabled=false }: { icon: ReactNode; text
 function Overlay({ open, onClose, children, side=false, bottom=false }: { open:boolean; onClose:()=>void; children:ReactNode; side?:boolean; bottom?:boolean }) {
   return (
     <div className={`fixed inset-0 z-[70] ${open ? "visible" : "invisible pointer-events-none"}`}>
-      <div 
-        className={`absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity duration-300 ${open ? "opacity-100" : "opacity-0"}`} 
+      <div
+        className={`absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity duration-300 ${open ? "opacity-100" : "opacity-0"}`}
         onClick={onClose}
       />
-      <div 
+      <div
         className={`absolute ${
-          side 
-            ? "top-0 left-0 h-full w-[310px] max-w-[85vw] rounded-r-3xl smooth-scroll overflow-y-auto" 
+          side
+            ? "top-0 left-0 h-full w-[310px] max-w-[85vw] rounded-r-3xl smooth-scroll overflow-y-auto"
             : "bottom-0 left-0 right-0 max-h-[90dvh] rounded-t-[28px] sm:rounded-t-3xl smooth-scroll overflow-y-auto"
         } shadow-2xl transition-all duration-300 ease-out ${
-          open 
-            ? "translate-x-0 translate-y-0 opacity-100" 
+          open
+            ? "translate-x-0 translate-y-0 opacity-100"
             : side ? "-translate-x-full opacity-0" : "translate-y-full opacity-0"
-        }`} 
+        }`}
         style={{ background: "var(--surface-solid)", color: "var(--text)" }}
       >
         {children}
