@@ -1,12 +1,14 @@
 export type AndroidAction =
   | "open_app" | "open_file" | "open_url" | "open_settings" | "make_call"
   | "compose_sms" | "read_screen" | "type_text" | "tap" | "long_press"
-  | "scroll" | "swipe" | "go_back" | "go_home" | "copy_text" | "paste_text";
+  | "scroll" | "swipe" | "go_back" | "go_home" | "copy_text" | "paste_text"
+  | "request_capability" | "open_accessibility_settings" | "open_app_settings";
 
 export type AndroidCommand = { type: "android_action"; action: AndroidAction; target?: string; text?: string; url?: string; direction?: "up" | "down" | "left" | "right" };
-export type AndroidResult = { ok: boolean; message: string; needsConfirmation?: boolean; choices?: string[] };
+export type AndroidResult = { ok: boolean; message: string; needsConfirmation?: boolean; choices?: string[]; code?: string };
+export type AndroidCapabilities = Record<string, boolean | string | undefined>;
 
-declare global { interface Window { NetoNative?: { execute(command: string): string; getCapabilityStatus?(): string } } }
+declare global { interface Window { NetoNative?: { execute(command: string): string; getCapabilityStatus?(): string; startVoice?(language: string): string; stopVoice?(): string; speak?(text: string, rate: number): string; stopSpeaking?(): string } } }
 
 const URL_PATTERN = /^https?:\/\/[\w.-]+(?:\/[^\s]*)?$/i;
 
@@ -32,4 +34,9 @@ export function executeAndroidCommand(command: AndroidCommand): AndroidResult | 
   if (!window.NetoNative) return null;
   try { const result = JSON.parse(window.NetoNative.execute(JSON.stringify(command))); return typeof result?.ok === "boolean" && typeof result?.message === "string" ? result : { ok: false, message: "NETO could not complete that Android action." }; }
   catch { return { ok: false, message: "NETO could not complete that Android action." }; }
+}
+
+export function getAndroidCapabilities(): AndroidCapabilities | null {
+  if (!window.NetoNative?.getCapabilityStatus) return null;
+  try { const result = JSON.parse(window.NetoNative.getCapabilityStatus()); return result && typeof result === "object" ? result : null; } catch { return null; }
 }

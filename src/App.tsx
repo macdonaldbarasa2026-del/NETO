@@ -5,7 +5,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, type CSSProperties, type ReactNode } from "react";
 import { Menu, Settings, Plus, Clock, Mic, MicOff, X, Send, Volume2, VolumeX, Download, UserRound, ArrowLeft, ImagePlus, Trash2, Search, Smartphone, ExternalLink, Copy, RotateCcw, Square } from "lucide-react";
 import { uploadAttachment, signInWithGoogle, logout, onAuthChange, saveConversation, loadRecentConversations, clearAllConversations } from "./lib/firebase";
-import { executeAndroidCommand, parseAndroidCommand, type AndroidAction, type AndroidCommand } from "./lib/androidControl";
+import { executeAndroidCommand, getAndroidCapabilities, parseAndroidCommand, type AndroidAction, type AndroidCommand, type AndroidCapabilities } from "./lib/androidControl";
 
 type Status = "idle" | "listening" | "thinking" | "speaking";
 type Theme = "light" | "dark" | "midnight" | "warm" | "contrast";
@@ -101,6 +101,8 @@ export default function App() {
   const [orbEnergy, setOrbEnergy] = useState(0.12);
   const [manualInstallInfo, setManualInstallInfo] = useState<{ platform: string; steps: string[] } | null>(null);
   const [nativeActionStatus, setNativeActionStatus] = useState("");
+  const [androidCapabilities, setAndroidCapabilities] = useState<AndroidCapabilities | null>(null);
+  const nativeVoiceHandlerRef = useRef<(text: string) => void>(() => {});
   const nativeAvailable = typeof window !== "undefined" && !!window.NetoNative;
 
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
@@ -124,6 +126,29 @@ export default function App() {
   const keepListeningRef = useRef(false);
   const intentionalStopRef = useRef(false);
   const liveOutputTextRef = useRef("");
+
+  useEffect(() => {
+    const refresh = () => setAndroidCapabilities(getAndroidCapabilities());
+    refresh();
+    const onNative = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      if (!detail?.data) return;
+      if (detail.type === "capabilities") { setAndroidCapabilities(detail.data); return; }
+      if (detail.type === "voice") {
+        const data = detail.data;
+        if (data.state === "partial") { transcriptRef.current = data.text || ""; setTranscript(data.text || ""); setStatus("listening"); }
+        else if (data.state === "final") { setTranscript(""); nativeVoiceHandlerRef.current(data.text || ""); }
+        else if (data.state === "thinking") setStatus("thinking");
+        else if (data.state === "listening") setStatus("listening");
+        else if (data.state === "level") setOrbEnergy(Math.max(.08, Number(data.value) || .08));
+        else if (data.state === "error") { setTranscript(data.message || "Voice input failed."); setStatus("idle"); }
+      }
+      if (detail.type === "tts") { if (detail.data.state === "speaking") setStatus("speaking"); else if (detail.data.state === "idle" || detail.data.state === "error") setStatus("idle"); }
+    };
+    window.addEventListener("neto-native", onNative);
+    window.addEventListener("focus", refresh);
+    return () => { window.removeEventListener("neto-native", onNative); window.removeEventListener("focus", refresh); };
+  }, []);
 
   useEffect(() => {
     localStorage.setItem("neto-ai-mode", aiMode);
@@ -409,10 +434,18 @@ export default function App() {
     } catch (error: any) {
       console.error(error);
       disconnectLive();
-      setTranscript(error?.name === "NotAllowedError" ? "Allow microphone access to use voice." : (error?.message || "Voice is unavailable right now."));
+      // Android WebView supports getUserMedia only when its permission callback succeeds.
+      // Use Android's supported recognizer when that browser path is unavailable.
+      if (window.NetoNative?.startVoice) {
+        try {
+          const result = JSON.parse(window.NetoNative.startVoice(language));
+          if (result?.ok) { setStatus("listening"); return; }
+          setTranscript(result?.message || "Voice is unavailable right now.");
+        } catch { setTranscript("Voice is unavailable right now."); }
+      } else setTranscript(error?.name === "NotAllowedError" ? "Allow microphone access to use voice." : (error?.message || "Voice is unavailable right now."));
       setStatus("idle");
     }
-  }, [aiMode, captionsEnabled, disconnectLive, isMicMuted, playLivePcm, stopAmbient, voiceMode]);
+  }, [aiMode, captionsEnabled, disconnectLive, isMicMuted, language, playLivePcm, stopAmbient, voiceMode]);
 
   
   const exportConversation = useCallback((format: 'txt' | 'json') => {
@@ -457,6 +490,7 @@ export default function App() {
     try { recognitionRef.current?.abort(); } catch {}
     requestAbortRef.current?.abort(); requestAbortRef.current = null;
     window.speechSynthesis?.cancel();
+    try { window.NetoNative?.stopVoice?.(); window.NetoNative?.stopSpeaking?.(); } catch {}
     
     disconnectLive();
     playbackTimeRef.current = 0;
@@ -477,6 +511,14 @@ export default function App() {
 
   const speakSentence = useCallback((text: string): Promise<void> => new Promise(resolve => {
     if (isMuted || !text.trim()) { resolve(); return; }
+    // Android WebView does not guarantee browser speech synthesis. Prefer its native TTS
+    // when available while keeping the PWA browser implementation unchanged.
+    if (window.NetoNative?.speak) {
+      try {
+        const nativeResult = JSON.parse(window.NetoNative.speak(text, speed));
+        if (nativeResult?.ok) { speakingRef.current = true; setStatus("speaking"); resolve(); return; }
+      } catch { /* fall through to browser TTS */ }
+    }
     const utterance = new SpeechSynthesisUtterance(text.trim());
     utterance.rate = speed; utterance.pitch = 1;
     const selected = pickVoice(); if (selected) utterance.voice = selected;
@@ -547,6 +589,8 @@ export default function App() {
     } finally { requestAbortRef.current = null; }
   }, [aiMode, chatHistory, isInstalled, installPrompt, speakSentence, theme, voiceMode]);
 
+  useEffect(() => { nativeVoiceHandlerRef.current = (text: string) => { if (text.trim()) void handleMessage(text); }; }, [handleMessage]);
+
   const startListening = useCallback(async () => {
     if (isMicMuted) return;
     if (voiceMode) { await startLiveVoice(); return; }
@@ -599,6 +643,8 @@ export default function App() {
     else void startListening();
   }, [status, stopEverything, handleMessage, startListening]);
 
+  const refreshAndroidCapabilities = useCallback(() => setAndroidCapabilities(getAndroidCapabilities()), []);
+
   const runNativeAction = useCallback((action: NativeAction, payload: Record<string, string> = {}) => {
     if (!window.NetoNative) { setNativeActionStatus("Android control is available in the NETO Android app only."); return; }
     const consequential = action === "make_call" || action === "compose_sms";
@@ -606,7 +652,8 @@ export default function App() {
     const command: AndroidCommand = { type: "android_action", action, ...payload } as AndroidCommand;
     const result = executeAndroidCommand(command);
     setNativeActionStatus(result?.message || "NETO could not complete that device action.");
-  }, []);
+    window.setTimeout(refreshAndroidCapabilities, 250);
+  }, [refreshAndroidCapabilities]);
 
   const copyLastResponse = useCallback(async () => {
     const message = [...chatHistory].reverse().find(item => item.role === "model")?.parts[0]?.text;
@@ -786,6 +833,14 @@ export default function App() {
           <div className="flex justify-center pb-4"><div className="w-9 h-1 rounded-full bg-black/10"/></div>
           <div className="flex items-center justify-between mb-5"><div className="flex items-center gap-3"><button aria-label="Back to home" onClick={()=>closePanel(setDeviceOpen)} className="w-10 h-10 rounded-full flex items-center justify-center" style={{background:"var(--accent-soft)"}}><ArrowLeft className="w-4 h-4"/></button><div><h3 className="text-lg font-semibold">Device</h3><p className="text-xs" style={{color:"var(--muted)"}}>{nativeAvailable ? "NETO Android bridge connected" : "Web capabilities only"}</p></div></div><Smartphone className="w-5 h-5" style={{color:"var(--accent)"}}/></div>
           <p className="text-sm leading-relaxed rounded-2xl p-4 border" style={{background:"var(--surface)",borderColor:"var(--border)",color:"var(--muted)"}}>Actions always open the official Android screen. NETO cannot grant permissions, send a message, or place a call silently.</p>
+          {nativeAvailable && <section className="mt-4"><div className="flex items-center justify-between"><p className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Device permissions</p><button onClick={refreshAndroidCapabilities} className="text-xs font-semibold" style={{color:"var(--accent)"}}>Refresh</button></div><div className="mt-2 space-y-2">
+            <CapabilityRow label="Microphone" enabled={!!androidCapabilities?.microphone} detail={androidCapabilities?.microphone ? "Voice input is ready." : androidCapabilities?.microphonePermanentlyDenied ? "Blocked in Android. Open app settings to allow it." : "Needed for Tap to Talk."} onClick={()=>runNativeAction(androidCapabilities?.microphonePermanentlyDenied ? "open_app_settings" : "request_capability", androidCapabilities?.microphonePermanentlyDenied ? {} : {target:"microphone"})}/>
+            <CapabilityRow label="Camera" enabled={!!androidCapabilities?.camera} detail="Needed only when a page requests camera capture." onClick={()=>runNativeAction("request_capability",{target:"camera"})}/>
+            <CapabilityRow label="Contacts" enabled={!!androidCapabilities?.contacts} detail="Used only to look up a requested call or SMS recipient." onClick={()=>runNativeAction("request_capability",{target:"contacts"})}/>
+            <CapabilityRow label="Notifications" enabled={!!androidCapabilities?.notifications} detail="Controls NETO notifications where Android requires permission." onClick={()=>runNativeAction("request_capability",{target:"notifications"})}/>
+            <CapabilityRow label="Accessibility Service" enabled={!!androidCapabilities?.accessibility} detail="Required for owner-authorized screen reading and UI actions." onClick={()=>runNativeAction("open_accessibility_settings")}/>
+            <CapabilityRow label="Calls and SMS" enabled={!!androidCapabilities?.phone && !!androidCapabilities?.sms} detail="NETO opens Android’s dialer or messaging app; you confirm the final action." />
+          </div></section>}
           <div className="mt-4 grid grid-cols-2 gap-3">
             <button onClick={()=>runNativeAction("open_settings")} className="h-16 rounded-2xl border text-sm font-semibold" style={{background:"var(--surface)",borderColor:"var(--border)"}}>Open settings</button>
             <button onClick={()=>runNativeAction("open_url", { url: "https://neto-fnp7.onrender.com" })} className="h-16 rounded-2xl border text-sm font-semibold flex items-center justify-center gap-2" style={{background:"var(--surface)",borderColor:"var(--border)"}}>Open NETO site <ExternalLink className="w-4 h-4"/></button>
@@ -980,6 +1035,8 @@ export default function App() {
     </div>
   );
 }
+
+function CapabilityRow({ label, enabled, detail, onClick }: { label: string; enabled: boolean; detail: string; onClick?: () => void }) { return <button disabled={!onClick} onClick={onClick} className="w-full text-left p-3 rounded-xl border disabled:cursor-default" style={{background:"var(--surface)",borderColor:"var(--border)"}}><div className="flex justify-between gap-3"><span className="text-sm font-semibold">{label}</span><span className="text-xs font-semibold" style={{color:enabled?"var(--accent)":"#dc2626"}}>{enabled?"Enabled":"Disabled"}</span></div><p className="mt-1 text-xs leading-relaxed" style={{color:"var(--muted)"}}>{detail}</p></button>; }
 
 function Action({ icon, text, onClick, disabled=false }: { icon: ReactNode; text: string; onClick:()=>void; disabled?:boolean }) { return <button disabled={disabled} onClick={onClick} className="w-full text-left h-11 px-4 rounded-full flex items-center gap-3 text-sm font-medium disabled:opacity-50" style={{color:"var(--text)"}}>{icon}<span className="[&>svg]:w-4 [&>svg]:h-4" style={{color:"var(--muted)"}}>{text}</span></button>; }
 

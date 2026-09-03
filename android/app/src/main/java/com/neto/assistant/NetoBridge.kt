@@ -15,6 +15,11 @@ class NetoBridge(private val activity: MainActivity, private val webView: WebVie
         catch (_: Exception) { NetoAndroidController.result(false, "That Android command was invalid.") }
     }
 
+    @JavascriptInterface fun startVoice(language: String): String = if (trustedPage()) activity.startVoice(language).toString() else NetoAndroidController.failureResult("NETO voice is unavailable on this page.").toString()
+    @JavascriptInterface fun stopVoice(): String = activity.stopVoice().toString()
+    @JavascriptInterface fun speak(text: String, rate: Double): String = if (trustedPage()) activity.speak(text, rate.toFloat()).toString() else NetoAndroidController.failureResult("NETO voice is unavailable on this page.").toString()
+    @JavascriptInterface fun stopSpeaking(): String = activity.stopSpeaking().toString()
+
     @JavascriptInterface
     fun getCapabilityStatus(): String {
         if (!trustedPage()) return "{}"

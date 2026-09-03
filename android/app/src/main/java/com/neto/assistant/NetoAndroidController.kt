@@ -18,15 +18,23 @@ import java.util.Locale
  */
 class NetoAndroidController(private val activity: MainActivity) {
     companion object {
-        private val ALLOWED = setOf("open_app", "open_file", "open_url", "open_settings", "make_call", "compose_sms", "read_screen", "type_text", "tap", "long_press", "scroll", "swipe", "go_back", "go_home", "copy_text", "paste_text")
-        fun result(ok: Boolean, message: String, choices: List<String> = emptyList()): String = JSONObject().put("ok", ok).put("message", message).put("choices", JSONArray(choices)).toString()
+        private val ALLOWED = setOf("open_app", "open_file", "open_url", "open_settings", "make_call", "compose_sms", "read_screen", "type_text", "tap", "long_press", "scroll", "swipe", "go_back", "go_home", "copy_text", "paste_text", "request_capability", "open_accessibility_settings", "open_app_settings")
+        fun result(ok: Boolean, message: String, choices: List<String> = emptyList(), code: String? = null): String = JSONObject().put("ok", ok).put("message", message).put("choices", JSONArray(choices)).apply { if (code != null) put("code", code) }.toString()
+        fun successResult(message: String) = JSONObject(result(true, message))
+        fun failureResult(message: String, code: String? = null) = JSONObject(result(false, message, code = code))
     }
 
     fun capabilities(): JSONObject = JSONObject().apply {
         put("androidControl", true)
-        put("accessibility", NetoAccessibilityService.instance != null)
+        put("accessibility", accessibilityEnabled())
+        put("accessibilityConnected", NetoAccessibilityService.instance != null)
         put("contacts", has(Manifest.permission.READ_CONTACTS))
         put("microphone", has(Manifest.permission.RECORD_AUDIO))
+        put("microphonePermanentlyDenied", activity.permanentlyDenied(Manifest.permission.RECORD_AUDIO))
+        put("camera", has(Manifest.permission.CAMERA))
+        put("contactsPermanentlyDenied", activity.permanentlyDenied(Manifest.permission.READ_CONTACTS))
+        put("notifications", if (android.os.Build.VERSION.SDK_INT >= 33) has(Manifest.permission.POST_NOTIFICATIONS) else true)
+        put("phone", activity.packageManager.resolveActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:0")), 0) != null)
         put("screenReading", NetoAccessibilityService.instance != null)
         put("screenCapture", false) // MediaProjection is intentionally not started silently.
         put("sms", true) // compose-only; Android Messages confirms sending.
@@ -41,17 +49,20 @@ class NetoAndroidController(private val activity: MainActivity) {
             "open_file" -> openFile(command.optString("target"))
             "open_url" -> openUrl(command.optString("url"))
             "open_settings" -> { activity.startActivity(Intent(Settings.ACTION_SETTINGS)); success("Opening Android Settings.") }
+            "request_capability" -> activity.requestCapability(command.optString("target"))
+            "open_accessibility_settings" -> { activity.openAccessibilitySettings(); success("Open NETO Accessibility Service and enable it, then return here.") }
+            "open_app_settings" -> { activity.openAppSettings(); success("Opening NETO app settings.") }
             "make_call" -> prepareCall(command.optString("target"))
             "compose_sms" -> composeSms(command.optString("target"), command.optString("text"))
-            "read_screen" -> accessibility { readScreen() }
-            "type_text" -> accessibility { typeText(command.optString("text")) }
-            "tap" -> accessibility { activate(command.optString("target"), false) }
-            "long_press" -> accessibility { activate(command.optString("target"), true) }
-            "scroll", "swipe" -> accessibility { scroll(command.optString("direction", "down")) }
-            "go_back" -> accessibility { globalBack() }
-            "go_home" -> accessibility { globalHome() }
-            "copy_text" -> accessibility { copy(command.optString("text")) }
-            "paste_text" -> accessibility { paste() }
+            "read_screen" -> accessibility { it.readScreen() }
+            "type_text" -> accessibility { it.typeText(command.optString("text")) }
+            "tap" -> accessibility { it.activate(command.optString("target"), false) }
+            "long_press" -> accessibility { it.activate(command.optString("target"), true) }
+            "scroll", "swipe" -> accessibility { it.scroll(command.optString("direction", "down")) }
+            "go_back" -> accessibility { it.globalBack() }
+            "go_home" -> accessibility { it.globalHome() }
+            "copy_text" -> accessibility { it.copy(command.optString("text")) }
+            "paste_text" -> accessibility { it.paste() }
             else -> failure("That Android action is not supported.")
         }
     }
@@ -107,7 +118,8 @@ class NetoAndroidController(private val activity: MainActivity) {
         return if (grouped.size == 1) grouped.first() else null
     }
 
-    private fun accessibility(action: () -> JSONObject): JSONObject = if (NetoAccessibilityService.instance == null) failure("Enable NETO Android Control in Accessibility settings first.") else action()
+    private fun accessibility(action: (NetoAccessibilityService) -> JSONObject): JSONObject { val service = NetoAccessibilityService.instance; return if (!accessibilityEnabled() || service == null) failure("Enable NETO Accessibility Service in Android Accessibility settings first.") else action(service) }
+    private fun accessibilityEnabled(): Boolean = android.provider.Settings.Secure.getString(activity.contentResolver, android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)?.split(':')?.any { it.equals("${activity.packageName}/.NetoAccessibilityService", true) || it.equals("${activity.packageName}/com.neto.assistant.NetoAccessibilityService", true) } == true
     private fun has(permission: String) = ContextCompat.checkSelfPermission(activity, permission) == PackageManager.PERMISSION_GRANTED
     private fun success(message: String) = JSONObject(result(true, message))
     private fun failure(message: String) = JSONObject(result(false, message))
