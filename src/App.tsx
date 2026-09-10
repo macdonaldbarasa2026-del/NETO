@@ -4,7 +4,7 @@
  */
 import { useState, useEffect, useRef, useCallback, useMemo, type CSSProperties, type ReactNode } from "react";
 import { Menu, Settings, Plus, Clock, Mic, MicOff, X, Send, Volume2, VolumeX, Download, UserRound, ArrowLeft, ImagePlus, Trash2, Search, Smartphone, ExternalLink, Copy, RotateCcw, Square, WifiOff } from "lucide-react";
-import { uploadAttachment, signInWithGoogle, logout, onAuthChange, saveConversation, loadRecentConversations, clearAllConversations } from "./lib/firebase";
+import { uploadAttachment, signInWithGoogle, signInWithNativeGoogleToken, logout, onAuthChange, saveConversation, loadRecentConversations, clearAllConversations } from "./lib/firebase";
 import { executeAndroidCommand, getAndroidCapabilities, isAndroidAction, parseAndroidCommand, type AndroidAction, type AndroidCommand, type AndroidCapabilities } from "./lib/androidControl";
 
 type Status = "idle" | "listening" | "thinking" | "speaking";
@@ -139,6 +139,14 @@ export default function App() {
       const detail = (event as CustomEvent).detail;
       if (!detail?.data) return;
       if (detail.type === "capabilities") { setAndroidCapabilities(detail.data); if (detail.data.microphone) setPermissionPromptOpen(false); return; }
+      if (detail.type === "auth") {
+        if (detail.data.state === "signed_in" && detail.data.idToken) {
+          void signInWithNativeGoogleToken(detail.data.idToken).catch((error: any) => setNativeActionStatus(error?.message || "NETO could not complete sign-in."));
+        } else if (detail.data.state === "error") {
+          setNativeActionStatus(detail.data.message || "Google sign-in failed.");
+        }
+        return;
+      }
       if (detail.type === "voice") {
         const data = detail.data;
         if (data.state === "partial") { transcriptRef.current = data.text || ""; setTranscript(data.text || ""); setStatus("listening"); }
@@ -783,6 +791,18 @@ export default function App() {
 
   const refreshAndroidCapabilities = useCallback(() => setAndroidCapabilities(getAndroidCapabilities()), []);
 
+  const signIn = useCallback(async () => {
+    if (window.NetoNative?.signInWithGoogle) {
+      try {
+        const result = JSON.parse(window.NetoNative.signInWithGoogle());
+        setNativeActionStatus(result?.message || "Opening secure Google sign-in…");
+      } catch { setNativeActionStatus("Google sign-in could not start."); }
+      return;
+    }
+    try { await signInWithGoogle(); }
+    catch (error: any) { setNativeActionStatus(error?.message || "Google sign-in failed. Please try again."); }
+  }, []);
+
   const runNativeAction = useCallback((action: NativeAction, payload: Record<string, string> = {}) => {
     if (!window.NetoNative) { setNativeActionStatus("Android control is available in the NETO Android app only."); return; }
     const consequential = action === "make_call" || action === "compose_sms";
@@ -1047,7 +1067,7 @@ export default function App() {
     <p className="text-sm font-semibold">{currentUser ? currentUser.displayName || "Signed In" : "Not Signed In"}</p>
     <p className="text-xs" style={{color:"var(--muted)"}}>{currentUser ? currentUser.email : "Sign in to save chat history and upload files."}</p>
   </div>
-  <button onClick={currentUser ? logout : signInWithGoogle} className="px-4 py-2 rounded-full text-xs font-semibold border" style={{background:currentUser?"var(--surface)":"var(--text)",color:currentUser?"var(--text)":"var(--bg)",borderColor:"var(--border)"}}>
+  <button onClick={currentUser ? logout : signIn} className="px-4 py-2 rounded-full text-xs font-semibold border" style={{background:currentUser?"var(--surface)":"var(--text)",color:currentUser?"var(--text)":"var(--bg)",borderColor:"var(--border)"}}>
     {currentUser ? "Sign Out" : "Sign in with Google"}
   </button>
 </div></section>

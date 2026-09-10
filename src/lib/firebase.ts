@@ -1,5 +1,5 @@
 import { getApp, getApps, initializeApp } from "firebase/app";
-import { getAuth, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from "firebase/auth";
+import { getAuth, signInWithPopup, signInWithCredential, GoogleAuthProvider, signOut, onAuthStateChanged } from "firebase/auth";
 import { getDownloadURL, getStorage, ref, uploadBytesResumable } from "firebase/storage";
 import { getFirestore, collection, addDoc, query, orderBy, getDocs, serverTimestamp, limit, deleteDoc, doc } from "firebase/firestore";
 
@@ -27,6 +27,11 @@ export async function signInWithGoogle() {
     console.error("Google Sign-in Error:", error);
     throw error;
   }
+}
+
+export async function signInWithNativeGoogleToken(idToken: string) {
+  if (!idToken) throw new Error("Native Google sign-in returned no Firebase token.");
+  return (await signInWithCredential(auth, GoogleAuthProvider.credential(idToken))).user;
 }
 
 export async function logout() {

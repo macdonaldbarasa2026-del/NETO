@@ -20,7 +20,7 @@ export function isAndroidAction(value: unknown): value is AndroidAction {
   return typeof value === "string" && (ANDROID_ACTIONS as readonly string[]).includes(value);
 }
 
-declare global { interface Window { NetoNative?: { execute(command: string): string; getCapabilityStatus?(): string; startVoice?(language: string): string; stopVoice?(): string; speak?(text: string, rate: number): string; stopSpeaking?(): string } } }
+declare global { interface Window { NetoNative?: { execute(command: string): string; getCapabilityStatus?(): string; startVoice?(language: string): string; stopVoice?(): string; speak?(text: string, rate: number): string; stopSpeaking?(): string; signInWithGoogle?(): string } } }
 
 function webUrl(value: string): string | null {
   const candidate = /^https?:\/\//i.test(value) ? value : `https://${value}`;
