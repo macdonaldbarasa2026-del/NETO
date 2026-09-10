@@ -5,7 +5,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, type CSSProperties, type ReactNode } from "react";
 import { Menu, Settings, Plus, Clock, Mic, MicOff, X, Send, Volume2, VolumeX, Download, UserRound, ArrowLeft, ImagePlus, Trash2, Search, Smartphone, ExternalLink, Copy, RotateCcw, Square, WifiOff } from "lucide-react";
 import { uploadAttachment, signInWithGoogle, logout, onAuthChange, saveConversation, loadRecentConversations, clearAllConversations } from "./lib/firebase";
-import { executeAndroidCommand, getAndroidCapabilities, isAndroidAction, type AndroidAction, type AndroidCommand, type AndroidCapabilities } from "./lib/androidControl";
+import { executeAndroidCommand, getAndroidCapabilities, isAndroidAction, parseAndroidCommand, type AndroidAction, type AndroidCommand, type AndroidCapabilities } from "./lib/androidControl";
 
 type Status = "idle" | "listening" | "thinking" | "speaking";
 type Theme = "light" | "dark" | "midnight" | "warm" | "contrast";
@@ -343,6 +343,7 @@ export default function App() {
     intentionalStopRef.current = false;
     liveOutputTextRef.current = "";
     try {
+      if (!window.isSecureContext) throw new Error("Voice requires a secure HTTPS connection.");
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("Microphone access is not supported here.");
 
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -471,7 +472,7 @@ export default function App() {
           if (result?.ok) { setStatus("listening"); return; }
           setTranscript(result?.message || "Voice is unavailable right now.");
         } catch { setTranscript("Voice is unavailable right now."); }
-      } else setTranscript(error?.name === "NotAllowedError" ? "Allow microphone access to use voice." : (error?.message || "Voice is unavailable right now."));
+      } else setTranscript(error?.name === "NotAllowedError" ? "Microphone access was denied. Enable it in browser or Android settings." : (error?.message || "Voice is unavailable right now."));
       setStatus("idle");
     }
   }, [aiMode, captionsEnabled, disconnectLive, isMicMuted, language, playLivePcm, stopAmbient, voiceMode]);
@@ -548,6 +549,7 @@ export default function App() {
         if (nativeResult?.ok) { speakingRef.current = true; setStatus("speaking"); resolve(); return; }
       } catch { /* fall through to browser TTS */ }
     }
+    if (!window.speechSynthesis || typeof SpeechSynthesisUtterance === "undefined") { setTranscript("Spoken replies are not supported in this browser."); resolve(); return; }
     const utterance = new SpeechSynthesisUtterance(text.trim());
     utterance.rate = speed; utterance.pitch = 1;
     const selected = pickVoice(); if (selected) utterance.voice = selected;
@@ -560,6 +562,20 @@ export default function App() {
 
   const handleMessage = useCallback(async (text: string, attachment?: ImageAttachment | null, speakResponse = false, toolResults?: { name: string; result: unknown }[]) => {
     if (!text.trim() && !toolResults?.length) return;
+
+    // Handle clear device commands locally so browser/search/call actions do not
+    // depend on the model emitting a streamed tool call first.
+    const localCommand = !toolResults?.length && window.NetoNative ? parseAndroidCommand(text) : null;
+    if (localCommand) {
+      setChatHistory(prev => [...prev, { role: "user", parts: [{ text }] }]);
+      const result = executeAndroidCommand(localCommand);
+      const message = result?.message || "NETO could not complete that Android action.";
+      setNativeActionStatus(message);
+      setChatHistory(prev => [...prev, { role: "model", parts: [{ text: message }] }]);
+      if (speakResponse) void speakSentence(message);
+      return;
+    }
+
     if (!navigator.onLine) {
       failedRequestRef.current = { text, attachment: attachment || null, speakResponse };
       setOfflineNoticeOpen(true);
@@ -963,8 +979,8 @@ export default function App() {
       <Overlay open={offlineNoticeOpen} onClose={()=>{ if (isOnline) setOfflineNoticeOpen(false); }} bottom>
         <div className="mx-auto max-w-[560px] px-6 pt-5 pb-[max(24px,env(safe-area-inset-bottom))] text-center">
           <div className="mx-auto w-14 h-14 rounded-full flex items-center justify-center" style={{background:"rgba(239,68,68,.12)",color:"#dc2626"}}><WifiOff className="w-7 h-7"/></div>
-          <h3 className="text-lg font-semibold mt-4">Oops, you’re offline</h3>
-          <p className="text-sm mt-2 leading-relaxed" style={{color:"var(--muted)"}}>Check your internet connection, then try again. Neto’s saved app screen remains available while you reconnect.</p>
+          <h3 className="text-lg font-semibold mt-4">Oops!</h3>
+          <p className="text-sm mt-2 leading-relaxed" style={{color:"var(--muted)"}}>Unable to load page. Please check your internet connection and try again.</p>
           <div className="grid grid-cols-2 gap-2 mt-6">
             {nativeAvailable && <button onClick={()=>runNativeAction("open_settings", {target:"wifi"})} className="h-12 rounded-full border font-semibold" style={{borderColor:"var(--border)",background:"var(--surface)"}}>Wi-Fi settings</button>}
             <button onClick={()=>{ if (!navigator.onLine) { setTranscript("Still offline — check Wi-Fi or mobile data."); return; } const retry = failedRequestRef.current; failedRequestRef.current = null; setOfflineNoticeOpen(false); setTranscript("Back online. You can continue."); if (retry) void handleMessage(retry.text, retry.attachment, retry.speakResponse); }} className={`${nativeAvailable ? "" : "col-span-2"} h-12 rounded-full text-white font-semibold`} style={{background:"var(--accent)"}}>Try again</button>

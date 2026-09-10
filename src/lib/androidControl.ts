@@ -22,17 +22,23 @@ export function isAndroidAction(value: unknown): value is AndroidAction {
 
 declare global { interface Window { NetoNative?: { execute(command: string): string; getCapabilityStatus?(): string; startVoice?(language: string): string; stopVoice?(): string; speak?(text: string, rate: number): string; stopSpeaking?(): string } } }
 
-const URL_PATTERN = /^https?:\/\/[\w.-]+(?:\/[^\s]*)?$/i;
+function webUrl(value: string): string | null {
+  const candidate = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+  try {
+    const parsed = new URL(candidate);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.toString() : null;
+  } catch { return null; }
+}
 
 /** Local parser: only unambiguous commands are routed to Android. */
 export function parseAndroidCommand(input: string): AndroidCommand | null {
   const text = input.trim().replace(/^neto[,:]?\s*/i, "");
   const settings = text.match(/^open\s+(wifi|wi-fi|bluetooth|notifications?|accessibility|app(?:lication)?|display|sound|audio|location|battery|date(?:\s*\/?\s*time)?|time|language|input|keyboard)\s+settings?(?:\.|!)*$/i);
   if (settings) return { type: "android_action", action: "open_settings", target: settings[1].toLowerCase() };
-  const search = text.match(/^search\s+(?:for\s+)?(.+?)(?:\.|!)*$/i);
+  const search = text.match(/^(?:search|look\s+up|google)\s+(?:(?:the\s+)?web\s+)?(?:for\s+)?(.+?)(?:\.|!)*$/i);
   if (search) return { type: "android_action", action: "open_url", url: `https://www.google.com/search?q=${encodeURIComponent(search[1].trim())}` };
   const open = text.match(/^open\s+(?:my\s+)?(.+?)(?:\.|!)*$/i);
-  if (open) { const target = open[1].trim(); if (/^(downloads?|files?|documents?)$/i.test(target)) return { type: "android_action", action: "open_file", target }; if (/^settings?$/i.test(target)) return { type: "android_action", action: "open_settings" }; if (URL_PATTERN.test(target)) return { type: "android_action", action: "open_url", url: target }; return { type: "android_action", action: "open_app", target }; }
+  if (open) { const target = open[1].trim(); if (/^(downloads?|files?|documents?)$/i.test(target)) return { type: "android_action", action: "open_file", target }; if (/^settings?$/i.test(target)) return { type: "android_action", action: "open_settings" }; const url = webUrl(target); if (url && (/^https?:\/\//i.test(target) || /^[\w.-]+\.[a-z]{2,}(?:[/:?#]|$)/i.test(target))) return { type: "android_action", action: "open_url", url }; return { type: "android_action", action: "open_app", target }; }
   if (/^(?:go\s+)?back(?:\.|!)*$/i.test(text)) return { type: "android_action", action: "go_back" };
   if (/^(?:go\s+)?home(?:\.|!)*$/i.test(text)) return { type: "android_action", action: "go_home" };
   const move = text.match(/^(scroll|swipe)\s+(up|down|left|right)(?:\.|!)*$/i);
