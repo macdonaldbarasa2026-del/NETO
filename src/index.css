@@ -171,10 +171,13 @@ input, select, textarea {
   background: radial-gradient(circle, #fff 0 18%, rgba(90,230,190,.95) 38%, rgba(16,163,127,.5) 58%, transparent 78%);
 }
 
-.caption-line { display:flex; gap:8px; align-items:flex-start; text-align:left; padding:2px 0; }
-.caption-speaker { min-width:38px; font-weight:700; font-size:11px; letter-spacing:.02em; color:var(--accent); }
+.caption-line { display:flex; gap:10px; align-items:flex-start; text-align:left; padding:4px 0; font-size:clamp(13px, 2.5vw, 15px); line-height:1.42; transition:opacity .2s ease; }
+.caption-line:not(:last-child) { opacity:.62; }
+.caption-speaker { min-width:40px; padding-top:1px; font-weight:800; font-size:10px; line-height:1.4; letter-spacing:.08em; text-transform:uppercase; color:var(--accent); }
 .caption-human .caption-speaker { color:var(--muted); }
-.caption-line span:last-child { flex:1; }
+.caption-human.is-live span:last-child { color:var(--muted); }
+.caption-ai.is-live span:last-child { color:var(--text); }
+.caption-line span:last-child { flex:1; min-width:0; overflow-wrap:anywhere; }
 
 .readable-response {
   width: min(92vw, 560px);
@@ -213,11 +216,12 @@ input, select, textarea {
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
   box-shadow: 0 8px 24px rgba(0,0,0,.08);
+  contain: layout paint;
   font-size: 13px;
   line-height: 18px;
   text-align: center;
   color: var(--text);
-  max-height: 122px;
+  max-height: min(132px, 19vh);
   overflow: hidden;
   margin-top: 18px;
   pointer-events: none;
