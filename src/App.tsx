@@ -372,8 +372,11 @@ export default function App() {
       playbackSourcesRef.current.delete(source);
       if (ctx.currentTime >= playbackTimeRef.current - 0.03 && playbackSourcesRef.current.size === 0) { speakingRef.current = false; setStatus("idle"); stopAmbient(); }
     };
-    speakingRef.current = true; setStatus("speaking"); startAmbient();
-  }, [decodeBase64, isMuted, startAmbient, stopAmbient]);
+    // Do not mix the optional ambient oscillator into AI playback. On small
+    // speakers it can sound like a horn or a stretched syllable.
+    stopAmbient();
+    speakingRef.current = true; setStatus("speaking");
+  }, [decodeBase64, isMuted, stopAmbient]);
 
   const disconnectLive = useCallback(() => {
     keepListeningRef.current = false;
@@ -613,11 +616,11 @@ export default function App() {
     utterance.rate = speed; utterance.pitch = 1;
     const selected = pickVoice(); if (selected) utterance.voice = selected;
     speakingRef.current = true;
-    utterance.onstart = () => { setStatus("speaking"); startAmbient(); };
+    utterance.onstart = () => { stopAmbient(); setStatus("speaking"); };
     utterance.onend = () => { speakingRef.current = false; stopAmbient(); resolve(); };
     utterance.onerror = () => { speakingRef.current = false; stopAmbient(); resolve(); };
     window.speechSynthesis?.speak(utterance);
-  }), [isMuted, speed, pickVoice, startAmbient, stopAmbient]);
+  }), [isMuted, speed, pickVoice, stopAmbient]);
 
   const handleMessage = useCallback(async (text: string, attachment?: ImageAttachment | null, speakResponse = false, toolResults?: { name: string; result: unknown }[]) => {
     if (!text.trim() && !toolResults?.length) return;
