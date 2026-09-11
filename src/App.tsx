@@ -13,6 +13,8 @@ type Theme = "light" | "dark" | "midnight" | "warm" | "contrast";
 type Message = { role: "user" | "model"; parts: { text: string }[] };
 type ImageAttachment = { name: string; mimeType: string; url: string; storagePath: string; size: number; text?: string };
 type NativeAction = AndroidAction;
+type CaptionSpeaker = "human" | "ai";
+type CaptionLine = { id: number; speaker: CaptionSpeaker; text: string; final?: boolean };
 
 
 const CREATOR = { name: "Macdonald Barasa", role: "Creator of Neto" };
@@ -96,7 +98,8 @@ export default function App() {
   const [installPrompt, setInstallPrompt] = useState<any>(null);
   const [isInstalled, setIsInstalled] = useState(false);
   const [installDismissed, setInstallDismissed] = useState(() => localStorage.getItem("voice-orb-install-dismissed") === "1");
-  const [captionsEnabled, setCaptionsEnabled] = useState(false);
+  const [captionsEnabled, setCaptionsEnabled] = useState(true);
+  const [captionLines, setCaptionLines] = useState<CaptionLine[]>([]);
   const [endConfirmOpen, setEndConfirmOpen] = useState(false);
   const [orbEnergy, setOrbEnergy] = useState(0.12);
   const [manualInstallInfo, setManualInstallInfo] = useState<{ platform: string; steps: string[] } | null>(null);
@@ -131,6 +134,35 @@ export default function App() {
   const keepListeningRef = useRef(false);
   const intentionalStopRef = useRef(false);
   const liveOutputTextRef = useRef("");
+  const captionLinesRef = useRef<CaptionLine[]>([]);
+  const captionIdRef = useRef(0);
+
+  const updateLiveCaption = useCallback((speaker: CaptionSpeaker, text: string, options: { final?: boolean; replace?: boolean } = {}) => {
+    const clean = text.replace(/\s+/g, " ").trim();
+    if (!clean) return;
+    const current = captionLinesRef.current;
+    const last = current[current.length - 1];
+    let next: CaptionLine[];
+    if (last?.speaker === speaker && !last.final) {
+      const value = options.replace ? clean : (last.text + " " + clean).replace(/\s+/g, " ").trim();
+      next = [...current.slice(0, -1), { ...last, text: value, final: options.final }];
+    } else {
+      next = [...current.slice(-5), { id: ++captionIdRef.current, speaker, text: clean, final: options.final }];
+    }
+    captionLinesRef.current = next;
+    setCaptionLines(next);
+    setTranscript(clean);
+  }, []);
+
+  const finalizeLiveCaption = useCallback((speaker: CaptionSpeaker) => {
+    const current = captionLinesRef.current;
+    const last = current[current.length - 1];
+    if (last?.speaker === speaker && !last.final) {
+      const next = [...current.slice(0, -1), { ...last, final: true }];
+      captionLinesRef.current = next;
+      setCaptionLines(next);
+    }
+  }, []);
 
   useEffect(() => {
     const refresh = () => setAndroidCapabilities(getAndroidCapabilities());
@@ -149,8 +181,8 @@ export default function App() {
       }
       if (detail.type === "voice") {
         const data = detail.data;
-        if (data.state === "partial") { transcriptRef.current = data.text || ""; setTranscript(data.text || ""); setStatus("listening"); }
-        else if (data.state === "final") { setTranscript(""); nativeVoiceHandlerRef.current(data.text || ""); }
+        if (data.state === "partial") { transcriptRef.current = data.text || ""; updateLiveCaption("human", data.text || "", { replace: true }); setStatus("listening"); }
+        else if (data.state === "final") { finalizeLiveCaption("human"); nativeVoiceHandlerRef.current(data.text || ""); }
         else if (data.state === "thinking") setStatus("thinking");
         else if (data.state === "listening") setStatus("listening");
         else if (data.state === "level") setOrbEnergy(Math.max(.08, Number(data.value) || .08));
@@ -162,7 +194,7 @@ export default function App() {
     window.addEventListener("neto-native", onNative);
     window.addEventListener("focus", refresh);
     return () => { window.removeEventListener("neto-native", onNative); window.removeEventListener("focus", refresh); };
-  }, []);
+  }, [finalizeLiveCaption, updateLiveCaption]);
 
   useEffect(() => {
     const updateNetwork = () => {
@@ -290,7 +322,7 @@ export default function App() {
   const startAmbient = useCallback(() => {
     if (!ambientSounds || ambientRef.current) return;
     try {
-      const ctx = new AudioContext();
+      const ctx = new AudioContext({ latencyHint: "interactive" });
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = "sine"; osc.frequency.value = 92; gain.gain.value = 0.018;
@@ -359,7 +391,7 @@ export default function App() {
       });
       micStreamRef.current = stream;
 
-      const ctx = new AudioContext();
+      const ctx = new AudioContext({ latencyHint: "interactive" });
       micContextRef.current = ctx;
       await ctx.resume();
       const source = ctx.createMediaStreamSource(stream);
@@ -433,10 +465,13 @@ export default function App() {
           if (msg.inputTranscription) {
             setTranscript(msg.inputTranscription);
             transcriptRef.current = msg.inputTranscription;
+            updateLiveCaption("human", msg.inputTranscription, { replace: !msg.inputTranscriptionDelta, final: msg.inputTranscriptionFinal });
+            if (msg.inputTranscriptionFinal) finalizeLiveCaption("human");
           }
           if (msg.outputTranscription) {
-            liveOutputTextRef.current += msg.outputTranscription;
-            if (captionsEnabled) setTranscript(liveOutputTextRef.current);
+            liveOutputTextRef.current = msg.outputTranscriptionDelta ? liveOutputTextRef.current + msg.outputTranscription : msg.outputTranscription;
+            updateLiveCaption("ai", msg.outputTranscription, { replace: !msg.outputTranscriptionDelta, final: msg.outputTranscriptionFinal });
+            if (msg.outputTranscriptionFinal) finalizeLiveCaption("ai");
           }
           if (msg.turnComplete) {
             const reply = liveOutputTextRef.current.trim();
@@ -483,7 +518,7 @@ export default function App() {
       } else setTranscript(error?.name === "NotAllowedError" ? "Microphone access was denied. Enable it in browser or Android settings." : (error?.message || "Voice is unavailable right now."));
       setStatus("idle");
     }
-  }, [aiMode, captionsEnabled, disconnectLive, isMicMuted, language, playLivePcm, stopAmbient, voiceMode]);
+  }, [aiMode, disconnectLive, finalizeLiveCaption, isMicMuted, language, playLivePcm, stopAmbient, updateLiveCaption, voiceMode]);
 
 
   const exportConversation = useCallback((format: 'txt' | 'json') => {
@@ -755,7 +790,7 @@ export default function App() {
     recognition.onresult = (event: any) => {
       let text = "";
       for (let i = 0; i < event.results.length; i++) text += event.results[i][0].transcript + " ";
-      transcriptRef.current = text.trim(); setTranscript(text.trim());
+      transcriptRef.current = text.trim(); updateLiveCaption("human", text.trim(), { replace: true });
     };
     recognition.onerror = (event: any) => {
       isListeningRef.current = false; stopAmbient();
@@ -780,7 +815,7 @@ export default function App() {
       }
     };
     try { recognition.start(); } catch { setStatus("idle"); }
-  }, [handleMessage, isMicMuted, startAmbient, stopAmbient, startLiveVoice, voiceMode, language]);
+  }, [handleMessage, isMicMuted, startAmbient, stopAmbient, startLiveVoice, updateLiveCaption, voiceMode, language]);
 
   const handleOrbTap = useCallback(() => {
     if (status === "listening" || isListeningRef.current) {
@@ -941,7 +976,7 @@ export default function App() {
               <div className="absolute inset-[1px] rounded-full shadow-[inset_0_0_24px_rgba(255,255,255,.9),inset_0_0_64px_rgba(255,255,255,.45)]"/>
             </div>
           </button>
-          {captionsEnabled && (transcript || (status === "speaking" && chatHistory.length > 0)) && <div className="orb-caption" role="status">{transcript || chatHistory[chatHistory.length - 1]?.parts?.[0]?.text}</div>}
+          {captionsEnabled && captionLines.length > 0 && <div className="orb-caption" role="status" aria-live="polite">{captionLines.slice(-3).map(line => <div key={line.id} className={line.speaker === "ai" ? "caption-line caption-ai" : "caption-line caption-human"}><span className="caption-speaker">{line.speaker === "ai" ? "Neto" : "You"}</span><span>{line.text}</span></div>)}</div>}
         </div>
         <div className="mt-6 sm:mt-10 text-center max-w-[300px]"><p className="text-[12.5px] sm:text-[13px] leading-[18px] font-medium" style={{color:"var(--muted)"}}>{status==="idle"?"Tap the orb to speak":status==="listening"?"Listening — speak now":status==="thinking"?"Processing your voice":"Speaking — tap to interrupt"}</p></div>
       </div>

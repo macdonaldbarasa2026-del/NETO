@@ -171,6 +171,11 @@ input, select, textarea {
   background: radial-gradient(circle, #fff 0 18%, rgba(90,230,190,.95) 38%, rgba(16,163,127,.5) 58%, transparent 78%);
 }
 
+.caption-line { display:flex; gap:8px; align-items:flex-start; text-align:left; padding:2px 0; }
+.caption-speaker { min-width:38px; font-weight:700; font-size:11px; letter-spacing:.02em; color:var(--accent); }
+.caption-human .caption-speaker { color:var(--muted); }
+.caption-line span:last-child { flex:1; }
+
 .orb-caption {
   position: absolute;
   z-index: 8;
@@ -189,6 +194,8 @@ input, select, textarea {
   line-height: 18px;
   text-align: center;
   color: var(--text);
+  max-height: 122px;
+  overflow: hidden;
   pointer-events: none;
 }
 

@@ -328,18 +328,18 @@ async function startServer() {
                 if (event.delta) clientWs.send(JSON.stringify({ audio: event.delta }));
                 break;
               case "conversation.item.input_audio_transcription.delta":
-                if (event.delta) clientWs.send(JSON.stringify({ inputTranscription: event.delta }));
+                if (event.delta) clientWs.send(JSON.stringify({ inputTranscription: event.delta, inputTranscriptionDelta: true }));
                 break;
               case "conversation.item.input_audio_transcription.completed":
-                if (event.transcript) clientWs.send(JSON.stringify({ inputTranscription: event.transcript, inputTranscriptionFinal: true }));
+                if (event.transcript) clientWs.send(JSON.stringify({ inputTranscription: event.transcript, inputTranscriptionFinal: true, inputTranscriptionDelta: false }));
                 break;
               case "response.audio_transcript.delta":
               case "response.output_audio_transcript.delta":
-                if (event.delta) clientWs.send(JSON.stringify({ outputTranscription: event.delta }));
+                if (event.delta) clientWs.send(JSON.stringify({ outputTranscription: event.delta, outputTranscriptionDelta: true }));
                 break;
               case "response.audio_transcript.done":
               case "response.output_audio_transcript.done":
-                if (event.transcript) clientWs.send(JSON.stringify({ outputTranscription: event.transcript, outputTranscriptionFinal: true }));
+                if (event.transcript) clientWs.send(JSON.stringify({ outputTranscription: event.transcript, outputTranscriptionFinal: true, outputTranscriptionDelta: false }));
                 break;
               case "input_audio_buffer.speech_started":
                 clientWs.send(JSON.stringify({ listening: true, interrupted: true }));
@@ -434,8 +434,8 @@ async function startServer() {
             const audio = content?.modelTurn?.parts?.find((part: any) => part?.inlineData?.data)?.inlineData?.data;
             if (audio) clientWs.send(JSON.stringify({ audio }));
             if (content?.interrupted) clientWs.send(JSON.stringify({ interrupted: true }));
-            if (content?.inputTranscription?.text) clientWs.send(JSON.stringify({ inputTranscription: content.inputTranscription.text }));
-            if (content?.outputTranscription?.text) clientWs.send(JSON.stringify({ outputTranscription: content.outputTranscription.text }));
+            if (content?.inputTranscription?.text) clientWs.send(JSON.stringify({ inputTranscription: content.inputTranscription.text, inputTranscriptionDelta: false }));
+            if (content?.outputTranscription?.text) clientWs.send(JSON.stringify({ outputTranscription: content.outputTranscription.text, outputTranscriptionDelta: false }));
             if (content?.turnComplete) clientWs.send(JSON.stringify({ turnComplete: true }));
           },
         },
