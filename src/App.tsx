@@ -145,6 +145,8 @@ export default function App() {
   const micAnalyserRef = useRef<AnalyserNode | null>(null);
   const micLevelRafRef = useRef<number | null>(null);
   const playbackContextRef = useRef<AudioContext | null>(null);
+  const playbackFilterRef = useRef<BiquadFilterNode | null>(null);
+  const playbackCompressorRef = useRef<DynamicsCompressorNode | null>(null);
   const playbackTimeRef = useRef(0);
   const playbackSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const keepListeningRef = useRef(false);
@@ -356,15 +358,39 @@ export default function App() {
   const playLivePcm = useCallback((base64: string) => {
     if (isMuted) return;
     const bytes = decodeBase64(base64);
-    const ctx = playbackContextRef.current || new AudioContext(); playbackContextRef.current = ctx;
+    if (bytes.byteLength < 2) return;
+    const ctx = playbackContextRef.current || new AudioContext();
+    playbackContextRef.current = ctx;
     void ctx.resume();
-    const samples = new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
+    // Live providers send signed 16-bit PCM. Ignore a trailing odd byte rather
+    // than letting a malformed chunk turn into a loud click or warped tone.
+    const sampleBytes = bytes.byteLength - (bytes.byteLength % 2);
+    const samples = new Int16Array(bytes.buffer, bytes.byteOffset, sampleBytes / 2);
     let peak = 0; for (let i = 0; i < samples.length; i += Math.max(1, Math.floor(samples.length / 160))) peak = Math.max(peak, Math.abs(samples[i]) / 32768);
     setOrbEnergy(Math.min(1, Math.max(0.12, peak * 2.4)));
     const buffer = ctx.createBuffer(1, samples.length, 24000);
     const channel = buffer.getChannelData(0);
     for (let i = 0; i < samples.length; i++) channel[i] = samples[i] / 32768;
-    const source = ctx.createBufferSource(); source.buffer = buffer; source.connect(ctx.destination);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    // Remove sub-bass rumble and soften sudden PCM peaks that can sound like a
+    // horn or a stretched syllable on phone speakers.
+    if (!playbackFilterRef.current || !playbackCompressorRef.current) {
+      const filter = ctx.createBiquadFilter();
+      filter.type = "highpass";
+      filter.frequency.value = 110;
+      filter.Q.value = 0.7;
+      const compressor = ctx.createDynamicsCompressor();
+      compressor.threshold.value = -18;
+      compressor.knee.value = 18;
+      compressor.ratio.value = 3;
+      compressor.attack.value = 0.004;
+      compressor.release.value = 0.12;
+      filter.connect(compressor).connect(ctx.destination);
+      playbackFilterRef.current = filter;
+      playbackCompressorRef.current = compressor;
+    }
+    source.connect(playbackFilterRef.current);
     playbackSourcesRef.current.add(source);
     const start = Math.max(ctx.currentTime + 0.01, playbackTimeRef.current || 0);
     source.start(start); playbackTimeRef.current = start + buffer.duration;
