@@ -628,6 +628,7 @@ export default function App() {
 
     // Do not call stopEverything() here. We want text and voice to "branch"
     // and run in parallel without "pollution collision"
+    setStatus("thinking");
 
     if (!toolResults?.length) setChatHistory(prev => [...prev, { role: "user", parts: [{ text: attachment ? `${text || "Image attached"} [${attachment.name}]` : text }] }]);
 
@@ -683,6 +684,7 @@ export default function App() {
             // Text before the first tool call
             if (parts[0]) {
               fullResponse += parts[0];
+              updateLiveCaption("ai", parts[0]);
               setChatHistory(prev => {
                 const last = prev[prev.length - 1];
                 if (last && last.role === "model") {
@@ -712,6 +714,7 @@ export default function App() {
             }
           } else {
             fullResponse += chunk;
+            updateLiveCaption("ai", chunk);
             setChatHistory(prev => {
               const last = prev[prev.length - 1];
               if (last && last.role === "model") {
@@ -761,7 +764,7 @@ export default function App() {
         }
       }
     } finally { requestAbortRef.current = null; }
-  }, [aiMode, chatHistory, isInstalled, installPrompt, speakSentence, theme, voiceMode]);
+  }, [aiMode, chatHistory, isInstalled, installPrompt, speakSentence, theme, updateLiveCaption, voiceMode]);
 
   useEffect(() => { nativeVoiceHandlerRef.current = (text: string) => { if (text.trim()) void handleMessage(text, null, true); }; }, [handleMessage]);
 
@@ -927,6 +930,7 @@ export default function App() {
   }, []);
 
   const statusText = status === "listening" ? "You are speaking..." : status === "thinking" ? "Neto is thinking..." : status === "speaking" ? "Neto is speaking..." : "";
+  const latestAiCaption = [...captionLines].reverse().find(line => line.speaker === "ai")?.text || "";
   const themeData = THEMES.find(t => t.id === theme)!;
 
   return (
@@ -976,7 +980,7 @@ export default function App() {
               <div className="absolute inset-[1px] rounded-full shadow-[inset_0_0_24px_rgba(255,255,255,.9),inset_0_0_64px_rgba(255,255,255,.45)]"/>
             </div>
           </button>
-          {captionsEnabled && captionLines.length > 0 && <div className="orb-caption" role="status" aria-live="polite">{captionLines.slice(-3).map(line => <div key={line.id} className={line.speaker === "ai" ? "caption-line caption-ai" : "caption-line caption-human"}><span className="caption-speaker">{line.speaker === "ai" ? "Neto" : "You"}</span><span>{line.text}</span></div>)}</div>}
+          {captionsEnabled && latestAiCaption && <div className={`readable-response ${status === "thinking" || status === "speaking" ? "is-streaming" : ""}`} role="status" aria-live="polite"><div className="response-label"><span className="response-dot" />Neto</div><p>{latestAiCaption}</p>{(status === "thinking" || status === "speaking") && <span className="typing-cursor" aria-label="Neto is typing">▌</span>}</div>}
         </div>
         <div className="mt-6 sm:mt-10 text-center max-w-[300px]"><p className="text-[12.5px] sm:text-[13px] leading-[18px] font-medium" style={{color:"var(--muted)"}}>{status==="idle"?"Tap the orb to speak":status==="listening"?"Listening — speak now":status==="thinking"?"Processing your voice":"Speaking — tap to interrupt"}</p></div>
       </div>
