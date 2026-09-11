@@ -3,7 +3,7 @@
  * Creator: Macdonald Barasa
  */
 import { useState, useEffect, useRef, useCallback, useMemo, type CSSProperties, type ReactNode } from "react";
-import { Menu, Settings, Plus, Clock, Mic, MicOff, X, Send, Volume2, VolumeX, Download, UserRound, ArrowLeft, ImagePlus, Trash2, Search, Smartphone, ExternalLink, Copy, RotateCcw, Square, WifiOff } from "lucide-react";
+import { Menu, Settings, Plus, Clock, Mic, MicOff, Camera, Video, X, Send, Volume2, VolumeX, Download, UserRound, ArrowLeft, ImagePlus, Trash2, Search, Smartphone, ExternalLink, Copy, RotateCcw, Square, WifiOff } from "lucide-react";
 import { uploadAttachment, signInWithGoogle, signInWithNativeGoogleToken, logout, onAuthChange, saveConversation, loadRecentConversations, clearAllConversations } from "./lib/firebase";
 import { executeAndroidCommand, getAndroidCapabilities, isAndroidAction, parseAndroidCommand, type AndroidAction, type AndroidCommand, type AndroidCapabilities } from "./lib/androidControl";
 
@@ -85,6 +85,7 @@ export default function App() {
   const [voiceMode, setVoiceMode] = useState(true);
   const [aiMode, setAiMode] = useState<"normal" | "pro">(() => (localStorage.getItem("neto-ai-mode") as "normal" | "pro") || "normal");
   const [liveConnected, setLiveConnected] = useState(false);
+  const [videoConversationActive, setVideoConversationActive] = useState(false);
   const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem("voice-orb-theme") as Theme) || "light");
   const [chatHistory, setChatHistory] = useState<Message[]>([]);
   const [historySearchQuery, setHistorySearchQuery] = useState("");
@@ -140,6 +141,10 @@ export default function App() {
   const ambientGainRef = useRef<GainNode | null>(null);
   const liveSessionRef = useRef<any>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
+  const cameraCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const cameraFrameTimerRef = useRef<number | null>(null);
   const micContextRef = useRef<AudioContext | null>(null);
   const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const micProcessorRef = useRef<ScriptProcessorNode | null>(null);
@@ -417,15 +422,19 @@ export default function App() {
     try { micAnalyserRef.current?.disconnect(); } catch {}
     try { micContextRef.current?.close(); } catch {}
     try { micStreamRef.current?.getTracks().forEach(t => t.stop()); } catch {}
+    try { cameraStreamRef.current?.getTracks().forEach(t => t.stop()); } catch {}
+    if (cameraFrameTimerRef.current) window.clearInterval(cameraFrameTimerRef.current);
+    cameraFrameTimerRef.current = null; cameraStreamRef.current = null;
+    if (cameraVideoRef.current) cameraVideoRef.current.srcObject = null;
     for (const source of playbackSourcesRef.current) { try { source.stop(); } catch {} }
     playbackSourcesRef.current.clear();
     playbackTimeRef.current = 0;
     micProcessorRef.current = null; micSourceRef.current = null; micAnalyserRef.current = null; micContextRef.current = null; micStreamRef.current = null; setOrbEnergy(0.12);
-    setLiveConnected(false); isListeningRef.current = false; speakingRef.current = false; stopAmbient();
+    setLiveConnected(false); setVideoConversationActive(false); isListeningRef.current = false; speakingRef.current = false; stopAmbient();
   }, [stopAmbient]);
 
-  const startLiveVoice = useCallback(async () => {
-    if (isMicMuted || !voiceMode || liveSessionRef.current) return;
+  const startLiveVoice = useCallback(async (withVideo = false) => {
+    if (isMicMuted || (!withVideo && !voiceMode) || liveSessionRef.current) return;
     keepListeningRef.current = true;
     intentionalStopRef.current = false;
     liveOutputTextRef.current = "";
@@ -435,8 +444,15 @@ export default function App() {
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        ...(withVideo ? { video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 1, max: 1 } } } : {}),
       });
       micStreamRef.current = stream;
+      if (withVideo) {
+        if (!stream.getVideoTracks()[0]) throw new Error("Camera access was not available.");
+        cameraStreamRef.current = stream;
+        if (cameraVideoRef.current) { cameraVideoRef.current.srcObject = stream; await cameraVideoRef.current.play().catch(() => {}); }
+        setVideoConversationActive(true);
+      }
 
       const ctx = new AudioContext({ latencyHint: "interactive" });
       micContextRef.current = ctx;
@@ -459,7 +475,7 @@ export default function App() {
       micLevelRafRef.current = requestAnimationFrame(sampleMicLevel);
 
       const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const ws = new WebSocket(`${wsProtocol}//${window.location.host}/live?mode=${encodeURIComponent(aiMode)}`);
+      const ws = new WebSocket(`${wsProtocol}//${window.location.host}/live?mode=${encodeURIComponent(withVideo ? "normal" : aiMode)}${withVideo ? "&video=1" : ""}`);
       liveSessionRef.current = ws;
 
       const processor = ctx.createScriptProcessor(2048, 1, 1);
@@ -491,6 +507,17 @@ export default function App() {
         setLiveConnected(true);
         setStatus("listening");
         isListeningRef.current = true;
+        if (withVideo) {
+          const canvas = cameraCanvasRef.current || document.createElement("canvas"); cameraCanvasRef.current = canvas;
+          const sendFrame = () => {
+            if (ws.readyState !== WebSocket.OPEN || !cameraVideoRef.current || cameraVideoRef.current.readyState < 2) return;
+            const width = 640; const height = Math.max(1, Math.round(width * (cameraVideoRef.current.videoHeight || 360) / (cameraVideoRef.current.videoWidth || 640)));
+            canvas.width = width; canvas.height = height; const context = canvas.getContext("2d"); if (!context) return;
+            context.drawImage(cameraVideoRef.current, 0, 0, width, height);
+            try { ws.send(JSON.stringify({ video: canvas.toDataURL("image/jpeg", 0.65).split(",")[1] })); } catch {}
+          };
+          sendFrame(); cameraFrameTimerRef.current = window.setInterval(sendFrame, 1000);
+        }
       };
 
       ws.onmessage = (event) => {
@@ -534,7 +561,7 @@ export default function App() {
         if (!intentionalStopRef.current) setTranscript("Voice connection failed. Please try again.");
       };
       ws.onclose = () => {
-        const shouldReconnect = !intentionalStopRef.current && keepListeningRef.current && !isMicMuted && voiceMode;
+        const shouldReconnect = !withVideo && !intentionalStopRef.current && keepListeningRef.current && !isMicMuted && voiceMode;
         setLiveConnected(false);
         isListeningRef.current = false;
         liveSessionRef.current = null;
@@ -544,6 +571,10 @@ export default function App() {
         try { micAnalyserRef.current?.disconnect(); } catch {}
         try { micContextRef.current?.close(); } catch {}
         try { micStreamRef.current?.getTracks().forEach(t => t.stop()); } catch {}
+        if (cameraFrameTimerRef.current) window.clearInterval(cameraFrameTimerRef.current);
+        cameraFrameTimerRef.current = null; cameraStreamRef.current = null;
+        if (cameraVideoRef.current) cameraVideoRef.current.srcObject = null;
+        setVideoConversationActive(false);
         micProcessorRef.current = null; micSourceRef.current = null; micAnalyserRef.current = null; micContextRef.current = null; micStreamRef.current = null;
         if (shouldReconnect) {
           setStatus("thinking");
@@ -567,6 +598,11 @@ export default function App() {
     }
   }, [aiMode, disconnectLive, finalizeLiveCaption, isMicMuted, language, playLivePcm, stopAmbient, updateLiveCaption, voiceMode]);
 
+
+  const startVideoConversation = useCallback(() => {
+    if (aiMode !== "normal") { setTranscript("Video Conversation uses Gemini Live. Switch AI mode to Normal first."); return; }
+    conversationActiveRef.current = true; void startLiveVoice(true);
+  }, [aiMode, startLiveVoice]);
 
   const exportConversation = useCallback((format: 'txt' | 'json') => {
     if (chatHistory.length === 0) return;
@@ -1043,6 +1079,7 @@ export default function App() {
             <div className="min-w-0"><span className="identity-eyebrow">Speaking with</span><strong>{currentUser?.displayName || "Guest"}</strong></div>
           </div>}
         </div>
+        <div className={videoConversationActive ? "mb-4 w-[min(360px,82vw)] overflow-hidden rounded-2xl border shadow-lg" : "hidden"} style={{borderColor:"var(--border)",background:"var(--surface-solid)"}}><video ref={cameraVideoRef} muted playsInline className="block w-full aspect-video object-cover"/><div className="flex items-center gap-2 px-3 py-2 text-xs font-medium" style={{color:"var(--muted)"}}><Camera className="w-3.5 h-3.5"/> Gemini is seeing your camera</div></div>
         {captionsEnabled && captionLines.length > 0 && <div className="orb-caption" aria-label="Live captions" role="status" aria-live="polite">
           {captionLines.slice(-3).map(line => <div className={`caption-line caption-${line.speaker} ${line.final ? "is-final" : "is-live"}`} key={line.id}>
             <span className="caption-speaker">{line.speaker === "human" ? "You" : "Neto"}</span>
@@ -1098,6 +1135,7 @@ export default function App() {
               )}
             </div>
           </div>
+          <button aria-label={videoConversationActive ? "End Video Conversation" : "Start Video Conversation"} onClick={()=>{ if(videoConversationActive){ stopEverything(); } else { stopEverything(); startVideoConversation(); } }} className="w-12 h-12 sm:w-[52px] sm:h-[52px] rounded-full flex items-center justify-center shadow-sm border shrink-0 active:scale-95 transition-transform" style={{background:videoConversationActive?"rgba(239,68,68,.12)":"var(--surface-solid)",borderColor:"var(--border)",color:videoConversationActive?"#ef4444":"var(--text)"}}>{videoConversationActive?<Video className="w-5 h-5"/>:<Camera className="w-5 h-5"/>}</button>
           <button aria-label={isMicMuted?"Unmute microphone":"Mute microphone"} onClick={toggleMic} className="w-12 h-12 sm:w-[52px] sm:h-[52px] rounded-full flex items-center justify-center shadow-sm border shrink-0 active:scale-95 transition-transform" style={{background:isMicMuted?"rgba(239,68,68,.12)":"var(--surface-solid)",borderColor:"var(--border)",color:isMicMuted?"#ef4444":"var(--text)"}}>{isMicMuted?<MicOff className="w-5 h-5"/>:<Mic className="w-5 h-5"/>}</button>
           <button aria-label="End conversation" onClick={()=>setEndConfirmOpen(true)} className="w-12 h-12 sm:w-[52px] sm:h-[52px] rounded-full text-white flex items-center justify-center shadow-md shrink-0 active:scale-95 transition-transform" style={{background:"var(--text)"}}><X className="w-5 h-5"/></button>
         </div>

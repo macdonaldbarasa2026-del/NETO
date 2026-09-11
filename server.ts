@@ -275,7 +275,8 @@ async function startServer() {
   }
 
   wss.on("connection", async (clientWs, req) => {
-    const mode = new URL(req.url || "/live", "http://localhost").searchParams.get("mode") === "pro" ? "pro" : "normal";
+    const liveUrl = new URL(req.url || "/live", "http://localhost");
+    const mode = liveUrl.searchParams.get("mode") === "pro" ? "pro" : "normal";
 
     if (mode === "pro") {
       if (!process.env.OPENAI_API_KEY) {
@@ -443,8 +444,9 @@ async function startServer() {
 
       clientWs.on("message", (data) => {
         try {
-          const { audio, text } = JSON.parse(data.toString());
+          const { audio, video, text } = JSON.parse(data.toString());
           if (audio) (session as any).sendRealtimeInput({ audio: { data: audio, mimeType: "audio/pcm;rate=16000" } as any });
+          if (video) (session as any).sendRealtimeInput({ video: { data: video, mimeType: "image/jpeg" } as any });
           if (text) (session as any).sendClientContent({ turns: [{ role: "user", parts: [{ text }] }], turnComplete: true });
         } catch (e) {
           console.error("Error processing normal voice websocket message", e);
