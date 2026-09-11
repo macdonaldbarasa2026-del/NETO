@@ -202,11 +202,9 @@ input, select, textarea {
 @keyframes typingBlink { 50% { opacity:0; } }
 
 .orb-caption {
-  position: absolute;
+  position: relative;
   z-index: 8;
-  left: 50%;
-  bottom: -68px;
-  transform: translateX(-50%);
+  flex: 0 0 auto;
   width: min(88vw, 480px);
   padding: 8px 14px;
   border: 1px solid var(--border);
@@ -221,6 +219,7 @@ input, select, textarea {
   color: var(--text);
   max-height: 122px;
   overflow: hidden;
+  margin-top: 18px;
   pointer-events: none;
 }
 
@@ -233,7 +232,7 @@ input, select, textarea {
 
 @media (max-width: 520px) {
   .orb-sparkles { inset: -18%; }
-  .orb-caption { bottom: -64px; width: 88vw; font-size: 12.5px; }
+  .orb-caption { width: 88vw; margin-top: 14px; font-size: 12.5px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

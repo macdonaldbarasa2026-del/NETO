@@ -47,6 +47,22 @@ function OrbSparkles({ status, energy }: { status: Status; energy: number }) {
   );
 }
 
+function WordReveal({ text, active }: { text: string; active: boolean }) {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  const [visibleCount, setVisibleCount] = useState(0);
+
+  useEffect(() => {
+    setVisibleCount(current => Math.min(current, words.length));
+    if (!words.length || visibleCount >= words.length) return;
+    const timer = window.setInterval(() => {
+      setVisibleCount(current => current >= words.length ? current : current + 1);
+    }, active ? 72 : 28);
+    return () => window.clearInterval(timer);
+  }, [text, active, words.length, visibleCount]);
+
+  return <>{words.slice(0, visibleCount).join(" ")}{visibleCount > 0 && visibleCount < words.length ? " " : ""}</>;
+}
+
 export default function App() {
   const [status, setStatus] = useState<Status>("idle");
   const [transcript, setTranscript] = useState("");
@@ -930,7 +946,6 @@ export default function App() {
   }, []);
 
   const statusText = status === "listening" ? "You are speaking..." : status === "thinking" ? "Neto is thinking..." : status === "speaking" ? "Neto is speaking..." : "";
-  const latestAiCaption = [...captionLines].reverse().find(line => line.speaker === "ai")?.text || "";
   const themeData = THEMES.find(t => t.id === theme)!;
 
   return (
@@ -980,8 +995,13 @@ export default function App() {
               <div className="absolute inset-[1px] rounded-full shadow-[inset_0_0_24px_rgba(255,255,255,.9),inset_0_0_64px_rgba(255,255,255,.45)]"/>
             </div>
           </button>
-          {captionsEnabled && latestAiCaption && <div className={`readable-response ${status === "thinking" || status === "speaking" ? "is-streaming" : ""}`} role="status" aria-live="polite"><div className="response-label"><span className="response-dot" />Neto</div><p>{latestAiCaption}</p>{(status === "thinking" || status === "speaking") && <span className="typing-cursor" aria-label="Neto is typing">▌</span>}</div>}
         </div>
+        {captionsEnabled && captionLines.length > 0 && <div className="orb-caption" role="status" aria-live="polite">
+          {captionLines.slice(-4).map(line => <div className={`caption-line caption-${line.speaker}`} key={line.id}>
+            <span className="caption-speaker">{line.speaker === "human" ? "You" : "Neto"}</span>
+            <span><WordReveal text={line.text} active={!line.final} />{!line.final && <span className="typing-cursor" aria-hidden="true">▌</span>}</span>
+          </div>)}
+        </div>}
         <div className="mt-6 sm:mt-10 text-center max-w-[300px]"><p className="text-[12.5px] sm:text-[13px] leading-[18px] font-medium" style={{color:"var(--muted)"}}>{status==="idle"?"Tap the orb to speak":status==="listening"?"Listening — speak now":status==="thinking"?"Processing your voice":"Speaking — tap to interrupt"}</p></div>
       </div>
 
