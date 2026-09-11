@@ -204,6 +204,70 @@ input, select, textarea {
 .typing-cursor { display:inline-block; margin-left:2px; color:var(--accent); animation:typingBlink 1s steps(1,end) infinite; }
 @keyframes typingBlink { 50% { opacity:0; } }
 
+.identity-card {
+  position:absolute;
+  z-index:9;
+  top:8px;
+  left:calc(50% + 76px);
+  display:flex;
+  align-items:center;
+  gap:8px;
+  width:min(148px, 38vw);
+  min-height:54px;
+  padding:9px 10px;
+  border:1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  border-radius:15px 15px 15px 5px;
+  background:color-mix(in srgb, var(--surface-solid) 92%, transparent);
+  backdrop-filter:blur(16px);
+  -webkit-backdrop-filter:blur(16px);
+  box-shadow:0 12px 28px rgba(0,0,0,.12);
+  transform:rotate(3deg);
+  transform-origin:bottom left;
+  pointer-events:none;
+}
+.identity-card::after {
+  content:"";
+  position:absolute;
+  left:13px;
+  bottom:-18px;
+  width:30px;
+  height:22px;
+  border-left:1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-bottom:1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius:0 0 0 18px;
+  transform:skewX(-22deg) rotate(-18deg);
+  opacity:.8;
+}
+.identity-avatar {
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  flex:0 0 auto;
+  width:28px;
+  height:28px;
+  border-radius:10px;
+  color:var(--accent);
+  background:var(--accent-soft);
+}
+.identity-eyebrow {
+  display:block;
+  margin-bottom:1px;
+  color:var(--muted);
+  font-size:9px;
+  line-height:1.1;
+  letter-spacing:.06em;
+  text-transform:uppercase;
+}
+.identity-card strong {
+  display:block;
+  overflow:hidden;
+  color:var(--text);
+  font-size:12px;
+  line-height:1.25;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
 .orb-caption {
   position: relative;
   z-index: 8;
@@ -236,6 +300,7 @@ input, select, textarea {
 
 @media (max-width: 520px) {
   .orb-sparkles { inset: -18%; }
+  .identity-card { top:-42px; left:auto; right:-28px; width:132px; min-height:50px; transform:rotate(4deg) scale(.94); }
   .orb-caption { width: 88vw; margin-top: 14px; font-size: 12.5px; }
 }
 

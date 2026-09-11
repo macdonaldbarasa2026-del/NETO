@@ -115,6 +115,7 @@ export default function App() {
   const [isInstalled, setIsInstalled] = useState(false);
   const [installDismissed, setInstallDismissed] = useState(() => localStorage.getItem("voice-orb-install-dismissed") === "1");
   const [captionsEnabled, setCaptionsEnabled] = useState(true);
+  const [showIdentityCard, setShowIdentityCard] = useState(() => localStorage.getItem("neto-show-identity-card") !== "0");
   const [captionLines, setCaptionLines] = useState<CaptionLine[]>([]);
   const [endConfirmOpen, setEndConfirmOpen] = useState(false);
   const [orbEnergy, setOrbEnergy] = useState(0.12);
@@ -150,6 +151,7 @@ export default function App() {
   const playbackTimeRef = useRef(0);
   const playbackSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const keepListeningRef = useRef(false);
+  const conversationActiveRef = useRef(false);
   const intentionalStopRef = useRef(false);
   const liveOutputTextRef = useRef("");
   const captionLinesRef = useRef<CaptionLine[]>([]);
@@ -604,6 +606,7 @@ export default function App() {
   };
 
   const stopEverything = useCallback(() => {
+    conversationActiveRef.current = false;
     isListeningRef.current = false;
     try { recognitionRef.current?.abort(); } catch {}
     requestAbortRef.current?.abort(); requestAbortRef.current = null;
@@ -815,16 +818,18 @@ export default function App() {
 
   const startListening = useCallback(async () => {
     if (isMicMuted) return;
+    conversationActiveRef.current = true;
     if (voiceMode) { await startLiveVoice(); return; }
     if (window.NetoNative?.startVoice) {
       try {
         const result = JSON.parse(window.NetoNative.startVoice(language));
         if (result?.ok) { transcriptRef.current = ""; setTranscript(""); setStatus("listening"); startAmbient(); return; }
+        conversationActiveRef.current = false;
         setTranscript(result?.message || "Voice is unavailable right now."); setStatus("idle"); return;
-      } catch { setTranscript("Android voice could not start."); setStatus("idle"); return; }
+      } catch { conversationActiveRef.current = false; setTranscript("Android voice could not start."); setStatus("idle"); return; }
     }
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) { setTranscript("Voice input is not supported in this browser."); setStatus("idle"); return; }
+    if (!SpeechRecognition) { conversationActiveRef.current = false; setTranscript("Voice input is not supported in this browser."); setStatus("idle"); return; }
     try { await navigator.mediaDevices?.getUserMedia({ audio: true }); } catch { setIsMicMuted(true); setTranscript("Microphone permission is required."); setStatus("idle"); return; }
     try { recognitionRef.current?.abort(); } catch {}
     intentionalStopRef.current = false;
@@ -843,7 +848,7 @@ export default function App() {
     recognition.onerror = (event: any) => {
       isListeningRef.current = false; stopAmbient();
       if (["not-allowed", "service-not-allowed"].includes(event.error)) {
-        intentionalStopRef.current = true; keepListeningRef.current = false;
+        intentionalStopRef.current = true; keepListeningRef.current = false; conversationActiveRef.current = false;
         setIsMicMuted(true); setTranscript("Microphone access was denied."); setStatus("idle");
       }
       // Other errors (e.g. "no-speech", "network", "aborted") are handled by onend, which
@@ -864,6 +869,14 @@ export default function App() {
     };
     try { recognition.start(); } catch { setStatus("idle"); }
   }, [handleMessage, isMicMuted, startAmbient, stopAmbient, startLiveVoice, updateLiveCaption, voiceMode, language]);
+
+  useEffect(() => {
+    if (!conversationActiveRef.current || status !== "idle" || isMicMuted) return;
+    const timer = window.setTimeout(() => {
+      if (conversationActiveRef.current && !isMicMuted && !isListeningRef.current && !liveSessionRef.current) void startListening();
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [isMicMuted, startListening, status]);
 
   const handleOrbTap = useCallback(() => {
     if (status === "listening" || isListeningRef.current) {
@@ -927,7 +940,7 @@ export default function App() {
   const toggleMic = useCallback(() => {
     setIsMicMuted(prev => {
       const next = !prev;
-      if (next) { intentionalStopRef.current = true; keepListeningRef.current = false; try { recognitionRef.current?.abort(); } catch {}  disconnectLive(); isListeningRef.current = false; stopAmbient(); if (status === "listening") setStatus("idle"); }
+      if (next) { conversationActiveRef.current = false; intentionalStopRef.current = true; keepListeningRef.current = false; try { recognitionRef.current?.abort(); } catch {}  disconnectLive(); isListeningRef.current = false; stopAmbient(); if (status === "listening") setStatus("idle"); }
       return next;
     });
   }, [disconnectLive, status, stopAmbient]);
@@ -1024,6 +1037,11 @@ export default function App() {
               <div className="absolute inset-[1px] rounded-full shadow-[inset_0_0_24px_rgba(255,255,255,.9),inset_0_0_64px_rgba(255,255,255,.45)]"/>
             </div>
           </button>
+          {showIdentityCard && <div className="identity-card" aria-label={`User profile: ${currentUser?.displayName || "Guest"}`}>
+            <span className="identity-thread" aria-hidden="true" />
+            <div className="identity-avatar"><UserRound className="w-4 h-4" /></div>
+            <div className="min-w-0"><span className="identity-eyebrow">Speaking with</span><strong>{currentUser?.displayName || "Guest"}</strong></div>
+          </div>}
         </div>
         {captionsEnabled && captionLines.length > 0 && <div className="orb-caption" aria-label="Live captions" role="status" aria-live="polite">
           {captionLines.slice(-3).map(line => <div className={`caption-line caption-${line.speaker} ${line.final ? "is-final" : "is-live"}`} key={line.id}>
@@ -1031,7 +1049,7 @@ export default function App() {
             <span><WordReveal text={line.text} active={!line.final} />{!line.final && <span className="typing-cursor" aria-hidden="true">▌</span>}</span>
           </div>)}
         </div>}
-        <div className="mt-6 sm:mt-10 text-center max-w-[300px]"><p className="text-[12.5px] sm:text-[13px] leading-[18px] font-medium" style={{color:"var(--muted)"}}>{status==="idle"?"Tap the orb to speak":status==="listening"?"Listening — speak now":status==="thinking"?"Processing your voice":"Speaking — tap to interrupt"}</p></div>
+        <div className="mt-6 sm:mt-10 text-center max-w-[300px]"><p className="text-[12.5px] sm:text-[13px] leading-[18px] font-medium" style={{color:"var(--muted)"}}>{status==="idle"?"Tap the orb to speak":status==="listening"?"Listening — speak naturally · tap orb to end":status==="thinking"?"Neto is preparing a reply":"Speaking — tap orb to end"}</p></div>
       </div>
 
       <div className="absolute bottom-0 left-0 right-0 z-20 px-3 sm:px-6 pb-[max(12px,env(safe-area-inset-bottom))] pt-2" style={{background:"linear-gradient(to top,var(--bg) 60%,transparent)"}}>
@@ -1160,6 +1178,13 @@ export default function App() {
   </button>
 </div></section>
 
+            <section><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Personalization</label>
+              <div className="mt-3 flex items-center justify-between min-h-14 px-4 py-3 rounded-2xl border" style={{background:"var(--surface)",borderColor:"var(--border)"}}>
+                <div className="pr-4"><p className="text-sm font-semibold">Show my name card</p><p className="text-xs mt-1" style={{color:"var(--muted)"}}>Display your name beside the Neto orb</p></div>
+                <button aria-label="Toggle name card" onClick={()=>setShowIdentityCard(value=>{const next=!value;localStorage.setItem("neto-show-identity-card",next?"1":"0");return next})} className="relative w-12 h-7 rounded-full shrink-0" style={{background:showIdentityCard?"var(--accent)":"var(--border)"}}><span className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all" style={{left:showIdentityCard?25:3}}/></button>
+              </div>
+            </section>
+
             <section>
               <label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Input Language</label>
               <div className="mt-3 relative">
@@ -1192,7 +1217,7 @@ export default function App() {
 
             <section><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Theme</label><div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-2">{THEMES.map(t=><button key={t.id} onClick={()=>setTheme(t.id)} className="p-3 rounded-2xl border text-left" style={{background:theme===t.id?"var(--accent-soft)":"var(--surface)",borderColor:theme===t.id?"var(--accent)":"var(--border)"}}><span className="text-sm font-semibold">{t.label}</span><span className="block text-[11px] mt-1" style={{color:"var(--muted)"}}>{t.description}</span></button>)}</div></section>
             <section><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Voice</label><div className="mt-3 grid grid-cols-3 gap-2">{["Sky","Cove","Breeze"].map(v=><button key={v} onClick={()=>setVoice(v)} className="h-12 rounded-full border text-sm font-semibold" style={{background:voice===v?"var(--text)":"var(--surface)",color:voice===v?"var(--bg)":"var(--text)",borderColor:"var(--border)"}}>{v}</button>)}</div></section>
-            <section><div className="flex items-center justify-between h-14 px-4 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><div><p className="text-sm font-semibold">Captions</p><p className="text-xs" style={{color:"var(--muted)"}}>Show your words and Neto replies below the orb</p></div><button aria-label="Toggle captions" onClick={()=>setCaptionsEnabled(v=>!v)} className="relative w-12 h-7 rounded-full" style={{background:captionsEnabled?"var(--accent)":"var(--border)"}}><span className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all" style={{left:captionsEnabled?25:3}}/></button></div></section><section><div className="flex items-center justify-between h-14 px-4 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><div><p className="text-sm font-semibold">Live voice</p><p className="text-xs" style={{color:"var(--muted)"}}>Instant voice conversation</p></div><button aria-label="Toggle live voice" onClick={()=>{setVoiceMode(v=>!v); if (voiceMode) { intentionalStopRef.current=true; keepListeningRef.current=false; disconnectLive(); }}} className="relative w-12 h-7 rounded-full" style={{background:voiceMode?"var(--accent)":"var(--border)"}}><span className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all" style={{left:voiceMode?25:3}}/></button></div></section><section><div className="flex items-center justify-between"><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Speed</label><span className="text-xs font-medium px-2.5 py-1 rounded-full" style={{background:"var(--accent-soft)"}}>{speed.toFixed(1)}×</span></div><input aria-label="Voice speed" className="mt-4 w-full" type="range" min="0.7" max="1.4" step="0.1" value={speed} onChange={e=>setSpeed(parseFloat(e.target.value))}/></section>
+            <section><div className="flex items-center justify-between h-14 px-4 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><div><p className="text-sm font-semibold">Captions</p><p className="text-xs" style={{color:"var(--muted)"}}>Show your words and Neto replies below the orb</p></div><button aria-label="Toggle captions" onClick={()=>setCaptionsEnabled(v=>!v)} className="relative w-12 h-7 rounded-full" style={{background:captionsEnabled?"var(--accent)":"var(--border)"}}><span className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all" style={{left:captionsEnabled?25:3}}/></button></div></section><section><div className="flex items-center justify-between h-14 px-4 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><div><p className="text-sm font-semibold">Live voice</p><p className="text-xs" style={{color:"var(--muted)"}}>Instant voice conversation</p></div><button aria-label="Toggle live voice" onClick={()=>{setVoiceMode(v=>!v); conversationActiveRef.current=false; if (voiceMode) { intentionalStopRef.current=true; keepListeningRef.current=false; disconnectLive(); }}} className="relative w-12 h-7 rounded-full" style={{background:voiceMode?"var(--accent)":"var(--border)"}}><span className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all" style={{left:voiceMode?25:3}}/></button></div></section><section><div className="flex items-center justify-between"><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Speed</label><span className="text-xs font-medium px-2.5 py-1 rounded-full" style={{background:"var(--accent-soft)"}}>{speed.toFixed(1)}×</span></div><input aria-label="Voice speed" className="mt-4 w-full" type="range" min="0.7" max="1.4" step="0.1" value={speed} onChange={e=>setSpeed(parseFloat(e.target.value))}/></section>
             <div className="flex items-center justify-between h-14 px-4 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><div><p className="text-sm font-semibold">Background sounds</p><p className="text-xs" style={{color:"var(--muted)"}}>Soft ambient hum while listening</p></div><button aria-label="Toggle background sounds" onClick={()=>setAmbientSounds(v=>!v)} className="relative w-12 h-7 rounded-full" style={{background:ambientSounds?"var(--accent)":"var(--border)"}}><span className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all" style={{left:ambientSounds?25:3}}/></button></div>
             <button onClick={()=>openPanel(setInstallOpen)} className="w-full h-12 rounded-full text-sm font-semibold border" style={{background:"var(--accent-soft)",borderColor:"var(--accent)"}}>{isInstalled?"Neto is installed":"Install Neto"}</button>
           </div>
