@@ -49,7 +49,7 @@ export async function ensureAuthenticatedUser() {
   throw new Error("Authentication required. Please sign in with Google in the app settings.");
 }
 
-export async function uploadAttachment(file: File) {
+export async function uploadAttachment(file: File, onProgress?: (progress: number) => void) {
   if (file.size > MAX_FILE_SIZE) throw new Error("Files must be 10 MB or smaller.");
   const user = await ensureAuthenticatedUser();
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-120);

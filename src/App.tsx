@@ -103,6 +103,7 @@ export default function App() {
   const [draftText, setDraftText] = useState("");
   const [imageAttachment, setImageAttachment] = useState<ImageAttachment | null>(null);
   const [uploadingFile, setUploadingFile] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [deviceOpen, setDeviceOpen] = useState(false);
@@ -917,7 +918,10 @@ export default function App() {
     }
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) { conversationActiveRef.current = false; setTranscript("Voice input is not supported in this browser."); setStatus("idle"); return; }
-    try { await navigator.mediaDevices?.getUserMedia({ audio: true }); } catch { setIsMicMuted(true); setTranscript("Microphone permission is required."); setStatus("idle"); return; }
+    try {
+      const permissionStream = await navigator.mediaDevices?.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      permissionStream?.getTracks().forEach(track => track.stop());
+    } catch { setIsMicMuted(true); setTranscript("Microphone permission is required."); setStatus("idle"); return; }
     try { recognitionRef.current?.abort(); } catch {}
     intentionalStopRef.current = false;
     keepListeningRef.current = true;
@@ -1154,6 +1158,7 @@ export default function App() {
                 if(!file) return;
                 if(file.size > 10 * 1024 * 1024){ setTranscript("Files must be 10 MB or smaller."); return; }
                 setUploadingFile(true);
+                setUploadProgress(0);
                 setTranscript(`Uploading ${file.name}…`);
                 try {
                   let text: string | undefined;
@@ -1161,13 +1166,17 @@ export default function App() {
                     text = await file.text();
                     if(text.length > 12000) text = text.slice(0,12000);
                   }
-                  const uploaded = await uploadAttachment(file);
+                  const uploaded = await uploadAttachment(file, progress => {
+                    setUploadProgress(progress);
+                    setTranscript(`Uploading ${file.name}… ${progress}%`);
+                  });
                   setImageAttachment({...uploaded, text});
                   setTranscript(`${file.name} uploaded.`);
                 } catch (error: any) {
                   setTranscript(error?.code === "storage/unauthorized" ? "Sign in with Google before uploading a private image or file." : (error?.message || "Upload failed. Please try again."));
                 } finally {
                   setUploadingFile(false);
+                  setUploadProgress(0);
                 }
               };
               input.click();
@@ -1180,8 +1189,9 @@ export default function App() {
                   <button aria-label="Remove attachment" onClick={()=>setImageAttachment(null)} className="w-6 h-6 rounded-full flex items-center justify-center shrink-0" style={{background:"var(--accent-soft)"}}><X className="w-3.5 h-3.5"/></button>
                 </div>
               )}
-              <input aria-label="Message" value={draftText} onChange={e=>setDraftText(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")submitText()}} placeholder={uploadingFile?"Uploading…":status==="listening"?"Listening…":"Type a message…"} className="w-full bg-transparent outline-none text-base sm:text-[15px]" style={{color:"var(--text)"}} />
-              {draftText.trim() && (
+              <input aria-label="Message" maxLength={12000} value={draftText} onChange={e=>setDraftText(e.target.value)} onKeyDown={e=>{if(e.key==="Enter" && !e.shiftKey)submitText()}} placeholder={uploadingFile?`Uploading… ${uploadProgress}%`:status==="listening"?"Listening…":"Type a message…"} className="w-full bg-transparent outline-none text-base sm:text-[15px]" style={{color:"var(--text)"}} />
+              {uploadingFile && <div className="absolute left-0 right-0 -bottom-1 h-1 overflow-hidden rounded-full" style={{background:"var(--accent-soft)"}}><div className="h-full transition-all" style={{width:`${uploadProgress}%`,background:"var(--accent)"}} /></div>}
+              {draftText.trim() && !uploadingFile && (
                 <button aria-label="Send" onClick={submitText} className="absolute top-1/2 -translate-y-1/2 right-0 w-8 h-8 rounded-full flex items-center justify-center text-white active:scale-95 transition-transform" style={{background:"var(--accent)"}}>
                   <Send className="w-4 h-4"/>
                 </button>
