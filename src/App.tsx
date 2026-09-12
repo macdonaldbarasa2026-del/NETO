@@ -47,6 +47,40 @@ function OrbSparkles({ status, energy }: { status: Status; energy: number }) {
   );
 }
 
+function ParticleOrb({ energy }: { energy: number }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const points = useMemo(() => Array.from({ length: 920 }, (_, i) => {
+    const y = 1 - (i / 919) * 2;
+    const radius = Math.sqrt(Math.max(0, 1 - y * y));
+    const theta = i * 2.3999632297;
+    return { x: Math.cos(theta) * radius, y, z: Math.sin(theta) * radius, size: 0.55 + (i % 5) * 0.12, phase: (i * 0.71) % (Math.PI * 2) };
+  }), []);
+  useEffect(() => {
+    const canvas = canvasRef.current; const context = canvas?.getContext("2d");
+    if (!canvas || !context) return;
+    let raf = 0;
+    const draw = (time: number) => {
+      const size = Math.min(canvas.clientWidth, canvas.clientHeight); const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      if (canvas.width !== Math.round(size * dpr) || canvas.height !== Math.round(size * dpr)) { canvas.width = Math.round(size * dpr); canvas.height = Math.round(size * dpr); }
+      context.setTransform(dpr, 0, 0, dpr, 0, 0); context.clearRect(0, 0, size, size);
+      const center = size / 2; const radius = size * 0.44; const rotation = time * 0.000055; const pulse = 1 + Math.max(0, energy - 0.12) * 0.08;
+      const glow = context.createRadialGradient(center, center, 0, center, center, radius * .82);
+      glow.addColorStop(0, "rgba(255,248,238,.9)"); glow.addColorStop(.3, "rgba(255,220,184,.28)"); glow.addColorStop(1, "rgba(255,153,72,0)");
+      context.fillStyle = glow; context.beginPath(); context.arc(center, center, radius * .82, 0, Math.PI * 2); context.fill();
+      points.map(point => { const x = point.x * Math.cos(rotation) - point.z * Math.sin(rotation); const z = point.x * Math.sin(rotation) + point.z * Math.cos(rotation); return { ...point, x, z }; }).sort((a, b) => a.z - b.z).forEach(point => {
+        const depth = (point.z + 1) / 2; const wobble = 1 + Math.sin(time * .0012 + point.phase) * .045 * Math.max(energy, .15);
+        const dot = Math.max(.45, point.size * (.62 + depth * .62) * wobble);
+        context.globalAlpha = (.18 + depth * .82) * (.42 + ((point.phase % 1) * .35));
+        context.fillStyle = point.phase % 3 < 1 ? "#fff0dd" : (point.phase % 2 < 1 ? "#ffc28e" : "#ff9b52");
+        context.beginPath(); context.arc(center + point.x * radius * pulse, center + point.y * radius * pulse, dot, 0, Math.PI * 2); context.fill();
+      });
+      context.globalAlpha = 1; raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw); return () => cancelAnimationFrame(raf);
+  }, [energy, points]);
+  return <canvas ref={canvasRef} className="particle-orb-canvas" aria-hidden="true" />;
+}
+
 function WordReveal({ text, active }: { text: string; active: boolean }) {
   const words = text.trim().split(/\s+/).filter(Boolean);
   const [visibleCount, setVisibleCount] = useState(0);
@@ -87,6 +121,8 @@ export default function App() {
   const [liveConnected, setLiveConnected] = useState(false);
   const [videoConversationActive, setVideoConversationActive] = useState(false);
   const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem("voice-orb-theme") as Theme) || "light");
+  const [orbStyle, setOrbStyle] = useState<"classic" | "particle">(() => localStorage.getItem("neto-orb-style") === "particle" ? "particle" : "classic");
+  const [cameraFacing, setCameraFacing] = useState<"user" | "environment">("user");
   const [chatHistory, setChatHistory] = useState<Message[]>([]);
   const [historySearchQuery, setHistorySearchQuery] = useState("");
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -444,7 +480,7 @@ export default function App() {
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        ...(withVideo ? { video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 1, max: 1 } } } : {}),
+        ...(withVideo ? { video: { facingMode: cameraFacing, width: { ideal: 640, max: 960 }, height: { ideal: 360, max: 540 }, frameRate: { ideal: 1, max: 2 } } } : {}),
       });
       micStreamRef.current = stream;
       if (withVideo) {
@@ -511,10 +547,10 @@ export default function App() {
           const canvas = cameraCanvasRef.current || document.createElement("canvas"); cameraCanvasRef.current = canvas;
           const sendFrame = () => {
             if (ws.readyState !== WebSocket.OPEN || !cameraVideoRef.current || cameraVideoRef.current.readyState < 2) return;
-            const width = 640; const height = Math.max(1, Math.round(width * (cameraVideoRef.current.videoHeight || 360) / (cameraVideoRef.current.videoWidth || 640)));
+            const width = 480; const height = Math.max(1, Math.round(width * (cameraVideoRef.current.videoHeight || 360) / (cameraVideoRef.current.videoWidth || 640)));
             canvas.width = width; canvas.height = height; const context = canvas.getContext("2d"); if (!context) return;
             context.drawImage(cameraVideoRef.current, 0, 0, width, height);
-            try { ws.send(JSON.stringify({ video: canvas.toDataURL("image/jpeg", 0.65).split(",")[1] })); } catch {}
+            try { ws.send(JSON.stringify({ video: canvas.toDataURL("image/jpeg", 0.52).split(",")[1] })); } catch {}
           };
           sendFrame(); cameraFrameTimerRef.current = window.setInterval(sendFrame, 1000);
         }
@@ -596,8 +632,23 @@ export default function App() {
       } else setTranscript(error?.name === "NotAllowedError" ? "Microphone access was denied. Enable it in browser or Android settings." : (error?.message || "Voice is unavailable right now."));
       setStatus("idle");
     }
-  }, [aiMode, disconnectLive, finalizeLiveCaption, isMicMuted, language, playLivePcm, stopAmbient, updateLiveCaption, voiceMode]);
+  }, [aiMode, cameraFacing, disconnectLive, finalizeLiveCaption, isMicMuted, language, playLivePcm, stopAmbient, updateLiveCaption, voiceMode]);
 
+
+  const switchCamera = useCallback(async () => {
+    if (!videoConversationActive || !micStreamRef.current || !navigator.mediaDevices?.getUserMedia) return;
+    const nextFacing = cameraFacing === "user" ? "environment" : "user";
+    try {
+      const nextStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: nextFacing, width: { ideal: 640, max: 960 }, height: { ideal: 360, max: 540 }, frameRate: { ideal: 1, max: 2 } } });
+      const nextTrack = nextStream.getVideoTracks()[0];
+      const currentTrack = micStreamRef.current.getVideoTracks()[0];
+      if (!nextTrack) throw new Error("Camera switch was not available.");
+      if (currentTrack) { micStreamRef.current.removeTrack(currentTrack); currentTrack.stop(); }
+      micStreamRef.current.addTrack(nextTrack);
+      if (cameraVideoRef.current) { cameraVideoRef.current.srcObject = micStreamRef.current; await cameraVideoRef.current.play().catch(() => {}); }
+      setCameraFacing(nextFacing);
+    } catch { setTranscript("Could not switch camera. Check camera permissions and try again."); }
+  }, [cameraFacing, videoConversationActive]);
 
   const startVideoConversation = useCallback(() => {
     if (aiMode !== "normal") { setTranscript("Video Conversation uses Gemini Live. Switch AI mode to Normal first."); return; }
@@ -1058,12 +1109,14 @@ export default function App() {
 
       <div className="flex flex-col items-center justify-center h-full min-h-[100dvh] px-4 pt-[max(64px,calc(env(safe-area-inset-top)+54px))] pb-[max(88px,calc(env(safe-area-inset-bottom)+76px))] select-none">
         <div className="h-6 mb-3 sm:mb-6 flex items-center justify-center">{statusText ? <span className="text-[12.5px] sm:text-[13px] tracking-wide font-medium px-3 py-1 rounded-full backdrop-blur border" style={{background:"var(--surface)",borderColor:"var(--border)",color:"var(--muted)"}}>{statusText}</span> : <span className="text-[13px] opacity-0">idle</span>}</div>
+        <div className={videoConversationActive ? "mb-4 w-[min(360px,82vw)] overflow-hidden rounded-2xl border shadow-lg" : "hidden"} style={{borderColor:"var(--border)",background:"var(--surface-solid)"}}><div className="relative"><video ref={cameraVideoRef} muted playsInline className={`block w-full aspect-video object-cover ${cameraFacing === "user" ? "-scale-x-100" : ""}`}/><button aria-label="Switch front or back camera" onClick={switchCamera} className="absolute right-2 top-2 w-9 h-9 rounded-full flex items-center justify-center text-white bg-black/55 backdrop-blur active:scale-95"><RotateCcw className="w-4 h-4"/></button></div><div className="flex items-center gap-2 px-3 py-2 text-xs font-medium" style={{color:"var(--muted)"}}><Camera className="w-3.5 h-3.5"/> Gemini is seeing your camera</div></div>
         <div className="relative flex items-center justify-center orb-reactive" style={{ "--orb-energy": orbEnergy } as CSSProperties}>
-          {(status === "listening" || status === "speaking") && [0,1,2].map(i => <div key={i} className="absolute w-[min(290px,78vw)] h-[min(290px,78vw)] rounded-full border pointer-events-none" style={{borderColor:status==="speaking"?"rgba(16,163,127,.22)":"rgba(100,140,255,.25)",animation:`pulseRing ${status==="speaking"?"1.25":"1.8"}s ease-out ${i*.3}s infinite`}}/>) }
-          <OrbSparkles status={status} energy={orbEnergy} />
-          <div className="absolute rounded-full blur-[20px] transition-all duration-700 pointer-events-none" style={{width: status === "listening" ? "min(340px, 86vw)" : "min(300px, 80vw)", height: status === "listening" ? "min(340px, 86vw)" : "min(300px, 80vw)", background:"radial-gradient(circle,var(--orb-glow),transparent 70%)"}} />
-          <button aria-label="Neto" onPointerDown={e=>{e.preventDefault();handleOrbTap()}} className="relative rounded-full overflow-hidden will-change-transform focus:outline-none touch-none active:scale-[0.98] transition-transform" style={{width:"min(270px, min(72vw, 34vh))",height:"min(270px, min(72vw, 34vh))",background:"linear-gradient(180deg,var(--orb-top) 0%,var(--orb-mid) 48%,var(--orb-bottom) 100%)",boxShadow:"0 20px 54px var(--orb-glow), inset 0 1px 0 rgba(255,255,255,.95), inset 0 -16px 32px rgba(255,255,255,.65)",animation:status==="idle"?"breatheIdle 4s ease-in-out infinite":status==="listening"?"breatheListening 1.2s ease-in-out infinite":status==="thinking"?"breatheThinking 1.7s ease-in-out infinite":"breatheSpeaking 1.05s ease-in-out infinite"}}>
+          {orbStyle !== "particle" && (status === "listening" || status === "speaking") && [0,1,2].map(i => <div key={i} className="absolute w-[min(290px,78vw)] h-[min(290px,78vw)] rounded-full border pointer-events-none" style={{borderColor:status==="speaking"?"rgba(16,163,127,.22)":"rgba(100,140,255,.25)",animation:`pulseRing ${status==="speaking"?"1.25":"1.8"}s ease-out ${i*.3}s infinite`}}/>) }
+          {orbStyle !== "particle" && <OrbSparkles status={status} energy={orbEnergy} />}
+          <div className={orbStyle === "particle" ? "hidden" : "absolute rounded-full blur-[20px] transition-all duration-700 pointer-events-none"} style={{width: status === "listening" ? "min(340px, 86vw)" : "min(300px, 80vw)", height: status === "listening" ? "min(340px, 86vw)" : "min(300px, 80vw)", background:"radial-gradient(circle,var(--orb-glow),transparent 70%)"}} />
+          <button aria-label="Neto" onPointerDown={e=>{e.preventDefault();handleOrbTap()}} className="relative rounded-full overflow-hidden will-change-transform focus:outline-none touch-none active:scale-[0.98] transition-transform" style={{width:videoConversationActive ? "min(180px, 48vw)" : "min(270px, min(72vw, 34vh))",height:videoConversationActive ? "min(180px, 48vw)" : "min(270px, min(72vw, 34vh))",background:"linear-gradient(180deg,var(--orb-top) 0%,var(--orb-mid) 48%,var(--orb-bottom) 100%)",boxShadow:"0 20px 54px var(--orb-glow), inset 0 1px 0 rgba(255,255,255,.95), inset 0 -16px 32px rgba(255,255,255,.65)",animation:status==="idle"?"breatheIdle 4s ease-in-out infinite":status==="listening"?"breatheListening 1.2s ease-in-out infinite":status==="thinking"?"breatheThinking 1.7s ease-in-out infinite":"breatheSpeaking 1.05s ease-in-out infinite"}}>
             <div className="absolute inset-0">
+              {orbStyle === "particle" ? <ParticleOrb energy={orbEnergy} /> : <>
               <div className="absolute left-1/2 -translate-x-1/2 bottom-[-6%] w-[92%] h-[58%] rounded-[50%] blur-[12px] bg-white/80" />
               <div className="absolute w-[58%] h-[28%] left-[12%] top-[46%] rounded-full blur-[16px] bg-white/70" style={{animation:`cloudDrift ${status==="speaking"?"2.8":"7"}s ease-in-out infinite`}} />
               <div className="absolute w-[46%] h-[24%] right-[14%] top-[56%] rounded-full blur-[14px] bg-white/60" style={{animation:`cloudDrift2 ${status==="speaking"?"2.3":"6"}s ease-in-out .3s infinite`}} />
@@ -1071,6 +1124,7 @@ export default function App() {
               <div className="absolute top-[-8%] left-1/2 -translate-x-1/2 w-[78%] h-[48%] rounded-full blur-[18px] opacity-60" style={{background:"radial-gradient(60% 60% at 50% 40%,rgba(255,255,255,.9),rgba(160,190,255,.35) 60%,transparent 85%)",animation:`shimmer ${status==="speaking"?"2.2":"5"}s ease-in-out infinite`}} />
               {status === "speaking" && <><div className="absolute inset-[18%] rounded-full border border-white/30" style={{animation:"speakingWave .8s ease-in-out infinite"}}/><div className="absolute inset-[28%] rounded-full border border-white/35" style={{animation:"speakingWave .8s ease-in-out .25s infinite"}}/></>}
               <div className="absolute inset-[1px] rounded-full shadow-[inset_0_0_24px_rgba(255,255,255,.9),inset_0_0_64px_rgba(255,255,255,.45)]"/>
+              </>}
             </div>
           </button>
           {showIdentityCard && <div className="identity-card" aria-label={`User profile: ${currentUser?.displayName || "Guest"}`}>
@@ -1079,7 +1133,6 @@ export default function App() {
             <div className="min-w-0"><span className="identity-eyebrow">Speaking with</span><strong>{currentUser?.displayName || "Guest"}</strong></div>
           </div>}
         </div>
-        <div className={videoConversationActive ? "mb-4 w-[min(360px,82vw)] overflow-hidden rounded-2xl border shadow-lg" : "hidden"} style={{borderColor:"var(--border)",background:"var(--surface-solid)"}}><video ref={cameraVideoRef} muted playsInline className="block w-full aspect-video object-cover"/><div className="flex items-center gap-2 px-3 py-2 text-xs font-medium" style={{color:"var(--muted)"}}><Camera className="w-3.5 h-3.5"/> Gemini is seeing your camera</div></div>
         {captionsEnabled && captionLines.length > 0 && <div className="orb-caption" aria-label="Live captions" role="status" aria-live="polite">
           {captionLines.slice(-3).map(line => <div className={`caption-line caption-${line.speaker} ${line.final ? "is-final" : "is-live"}`} key={line.id}>
             <span className="caption-speaker">{line.speaker === "human" ? "You" : "Neto"}</span>
@@ -1255,6 +1308,7 @@ export default function App() {
 
             <section><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Theme</label><div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-2">{THEMES.map(t=><button key={t.id} onClick={()=>setTheme(t.id)} className="p-3 rounded-2xl border text-left" style={{background:theme===t.id?"var(--accent-soft)":"var(--surface)",borderColor:theme===t.id?"var(--accent)":"var(--border)"}}><span className="text-sm font-semibold">{t.label}</span><span className="block text-[11px] mt-1" style={{color:"var(--muted)"}}>{t.description}</span></button>)}</div></section>
             <section><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Voice</label><div className="mt-3 grid grid-cols-3 gap-2">{["Sky","Cove","Breeze"].map(v=><button key={v} onClick={()=>setVoice(v)} className="h-12 rounded-full border text-sm font-semibold" style={{background:voice===v?"var(--text)":"var(--surface)",color:voice===v?"var(--bg)":"var(--text)",borderColor:"var(--border)"}}>{v}</button>)}</div></section>
+            <section><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Orb style</label><div className="mt-3 grid grid-cols-2 gap-2 p-1 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><button onClick={()=>{setOrbStyle("classic");localStorage.setItem("neto-orb-style","classic")}} className="h-11 rounded-full text-sm font-semibold" style={{background:orbStyle === "classic" ? "var(--text)" : "transparent",color:orbStyle === "classic" ? "var(--bg)" : "var(--text)"}}>Classic</button><button onClick={()=>{setOrbStyle("particle");localStorage.setItem("neto-orb-style","particle")}} className="h-11 rounded-full text-sm font-semibold" style={{background:orbStyle === "particle" ? "#e87928" : "transparent",color:orbStyle === "particle" ? "white" : "var(--text)"}}>Particle</button></div><p className="text-xs mt-2" style={{color:"var(--muted)"}}>A calm orange point-cloud globe.</p></section>
             <section><div className="flex items-center justify-between h-14 px-4 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><div><p className="text-sm font-semibold">Captions</p><p className="text-xs" style={{color:"var(--muted)"}}>Show your words and Neto replies below the orb</p></div><button aria-label="Toggle captions" onClick={()=>setCaptionsEnabled(v=>!v)} className="relative w-12 h-7 rounded-full" style={{background:captionsEnabled?"var(--accent)":"var(--border)"}}><span className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all" style={{left:captionsEnabled?25:3}}/></button></div></section><section><div className="flex items-center justify-between h-14 px-4 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><div><p className="text-sm font-semibold">Live voice</p><p className="text-xs" style={{color:"var(--muted)"}}>Instant voice conversation</p></div><button aria-label="Toggle live voice" onClick={()=>{setVoiceMode(v=>!v); conversationActiveRef.current=false; if (voiceMode) { intentionalStopRef.current=true; keepListeningRef.current=false; disconnectLive(); }}} className="relative w-12 h-7 rounded-full" style={{background:voiceMode?"var(--accent)":"var(--border)"}}><span className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all" style={{left:voiceMode?25:3}}/></button></div></section><section><div className="flex items-center justify-between"><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Speed</label><span className="text-xs font-medium px-2.5 py-1 rounded-full" style={{background:"var(--accent-soft)"}}>{speed.toFixed(1)}×</span></div><input aria-label="Voice speed" className="mt-4 w-full" type="range" min="0.7" max="1.4" step="0.1" value={speed} onChange={e=>setSpeed(parseFloat(e.target.value))}/></section>
             <div className="flex items-center justify-between h-14 px-4 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><div><p className="text-sm font-semibold">Background sounds</p><p className="text-xs" style={{color:"var(--muted)"}}>Soft ambient hum while listening</p></div><button aria-label="Toggle background sounds" onClick={()=>setAmbientSounds(v=>!v)} className="relative w-12 h-7 rounded-full" style={{background:ambientSounds?"var(--accent)":"var(--border)"}}><span className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all" style={{left:ambientSounds?25:3}}/></button></div>
             <button onClick={()=>openPanel(setInstallOpen)} className="w-full h-12 rounded-full text-sm font-semibold border" style={{background:"var(--accent-soft)",borderColor:"var(--accent)"}}>{isInstalled?"Neto is installed":"Install Neto"}</button>
