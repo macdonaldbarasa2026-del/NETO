@@ -104,6 +104,7 @@ export default function App() {
   const [imageAttachment, setImageAttachment] = useState<ImageAttachment | null>(null);
   const [uploadingFile, setUploadingFile] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadingFileName, setUploadingFileName] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [deviceOpen, setDeviceOpen] = useState(false);
@@ -1152,12 +1153,13 @@ export default function App() {
             <button aria-label="Attach image or file" disabled={uploadingFile} onClick={()=>{
               const input=document.createElement("input");
               input.type="file";
-              input.accept="image/*,.pdf,.txt,.md,.json,.csv,.xml,.html,text/plain,application/json,text/csv,application/pdf,text/html,application/xml";
+              input.accept="image/*,.pdf,.doc,.docx,.txt,.md,.json,.csv,.xml,.html,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/csv,application/json,application/xml,text/html";
               input.onchange=async()=>{
                 const file=input.files?.[0];
                 if(!file) return;
                 if(file.size > 10 * 1024 * 1024){ setTranscript("Files must be 10 MB or smaller."); return; }
                 setUploadingFile(true);
+                setUploadingFileName(file.name);
                 setUploadProgress(0);
                 setTranscript(`Uploading ${file.name}…`);
                 try {
@@ -1176,17 +1178,18 @@ export default function App() {
                   setTranscript(error?.code === "storage/unauthorized" ? "Sign in with Google before uploading a private image or file." : (error?.message || "Upload failed. Please try again."));
                 } finally {
                   setUploadingFile(false);
+                  setUploadingFileName("");
                   setUploadProgress(0);
                 }
               };
               input.click();
             }} className="w-9 h-9 rounded-full flex items-center justify-center transition shrink-0 disabled:opacity-50 active:scale-95" style={{background:"var(--accent-soft)"}}>{imageAttachment?<ImagePlus className="w-4 h-4 sm:w-5 sm:h-5"/>:<Plus className="w-4 h-4 sm:w-5 sm:h-5"/>}</button>
             <div className="flex-1 min-w-0 relative">
-              {imageAttachment && (
-                <div className="absolute bottom-[44px] left-0 flex items-center gap-2 rounded-xl border p-1.5 shadow-sm max-w-[260px] sm:max-w-[280px]" style={{background:"var(--surface-solid)",borderColor:"var(--border)"}}>
-                  {imageAttachment.mimeType.startsWith("image/")?<img src={imageAttachment.url} alt={imageAttachment.name} className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg object-cover"/>:<div className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg flex items-center justify-center text-xs font-semibold" style={{background:"var(--accent-soft)"}}>FILE</div>}
-                  <span className="text-xs truncate max-w-[150px] sm:max-w-[170px]">{imageAttachment.name}</span>
-                  <button aria-label="Remove attachment" onClick={()=>setImageAttachment(null)} className="w-6 h-6 rounded-full flex items-center justify-center shrink-0" style={{background:"var(--accent-soft)"}}><X className="w-3.5 h-3.5"/></button>
+              {(imageAttachment || uploadingFileName) && (
+                <div className="absolute z-30 bottom-[52px] left-0 flex items-center gap-2 rounded-2xl border p-2 shadow-lg max-w-[min(300px,82vw)]" style={{background:"var(--surface-solid)",borderColor:"var(--border)"}}>
+                  {imageAttachment?.mimeType.startsWith("image/") ? <img src={imageAttachment.url} alt={imageAttachment.name} className="w-11 h-11 rounded-xl object-cover"/> : <div className="w-11 h-11 rounded-xl flex items-center justify-center text-[10px] font-bold" style={{background:"var(--accent-soft)",color:"var(--accent)"}}>{uploadingFile ? "UP…" : "FILE"}</div>}
+                  <div className="min-w-0"><span className="block text-xs font-semibold truncate max-w-[190px]">{imageAttachment?.name || uploadingFileName}</span><span className="block text-[10px] mt-0.5" style={{color:"var(--muted)"}}>{uploadingFile ? `Uploading ${uploadProgress}%` : "Ready to send"}</span></div>
+                  {!uploadingFile && <button aria-label="Remove attachment" onClick={()=>setImageAttachment(null)} className="w-7 h-7 rounded-full flex items-center justify-center shrink-0" style={{background:"var(--accent-soft)"}}><X className="w-3.5 h-3.5"/></button>}
                 </div>
               )}
               <input aria-label="Message" maxLength={12000} value={draftText} onChange={e=>setDraftText(e.target.value)} onKeyDown={e=>{if(e.key==="Enter" && !e.shiftKey)submitText()}} placeholder={uploadingFile?`Uploading… ${uploadProgress}%`:status==="listening"?"Listening…":"Type a message…"} className="w-full bg-transparent outline-none text-base sm:text-[15px]" style={{color:"var(--text)"}} />
