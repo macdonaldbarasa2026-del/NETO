@@ -1037,6 +1037,20 @@ export default function App() {
     });
   }, [disconnectLive, status, stopAmbient]);
 
+  const shareImageWithLive = useCallback(async (attachment: ImageAttachment) => {
+    const socket = liveSessionRef.current;
+    if (aiMode !== "normal") return false;
+    if (!socket || socket.readyState !== WebSocket.OPEN || !attachment.mimeType.startsWith("image/")) return false;
+    try {
+      const response = await fetch(attachment.url);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      let binary = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      socket.send(JSON.stringify({ video: btoa(binary) }));
+      return true;
+    } catch { return false; }
+  }, [aiMode]);
+
   const submitText = useCallback(() => {
     const text = draftText.trim();
     if (text || imageAttachment) {
@@ -1132,6 +1146,11 @@ export default function App() {
               </>}
             </div>
           </button>
+          {(imageAttachment || uploadingFileName) && (status === "listening" || status === "thinking" || status === "speaking") && <div className="voice-image-float" aria-label="Image shared in voice conversation">
+            {imageAttachment?.mimeType.startsWith("image/") ? <img src={imageAttachment.url} alt={imageAttachment.name} /> : <div className="voice-image-file">FILE</div>}
+            <div className="voice-image-meta"><strong>{imageAttachment?.name || uploadingFileName}</strong><span>{uploadingFile ? `Uploading ${uploadProgress}%` : "In voice conversation"}</span></div>
+            {!uploadingFile && <button aria-label="Remove shared image" onClick={()=>setImageAttachment(null)}><X className="w-3.5 h-3.5" /></button>}
+          </div>}
           {showIdentityCard && <div className="identity-card" aria-label={`User profile: ${currentUser?.displayName || "Guest"}`}>
             <span className="identity-thread" aria-hidden="true" />
             <div className="identity-avatar"><UserRound className="w-4 h-4" /></div>
@@ -1172,8 +1191,10 @@ export default function App() {
                     setUploadProgress(progress);
                     setTranscript(`Uploading ${file.name}… ${progress}%`);
                   });
-                  setImageAttachment({...uploaded, text});
-                  setTranscript(`${file.name} uploaded.`);
+                  const nextAttachment = {...uploaded, text};
+                  setImageAttachment(nextAttachment);
+                  const sharedInVoice = await shareImageWithLive(nextAttachment);
+                  setTranscript(sharedInVoice ? `${file.name} shared with Neto.` : `${file.name} uploaded.`);
                 } catch (error: any) {
                   setTranscript(error?.code === "storage/unauthorized" ? "Sign in with Google before uploading a private image or file." : (error?.message || "Upload failed. Please try again."));
                 } finally {
