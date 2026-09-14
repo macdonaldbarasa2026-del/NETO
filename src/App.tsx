@@ -1085,7 +1085,7 @@ export default function App() {
 
   useEffect(() => {
     const container = captionScrollRef.current;
-    if (!container || !captionFocusOpen) return;
+    if (!container) return;
     container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
   }, [captionFocusOpen, captionLines]);
 

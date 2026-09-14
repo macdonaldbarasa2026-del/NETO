@@ -177,7 +177,7 @@ input, select, textarea {
 .caption-human .caption-speaker { color:var(--muted); }
 .caption-human.is-live span:last-child { color:var(--muted); }
 .caption-ai.is-live span:last-child { color:var(--text); }
-.caption-line span:last-child { flex:1; min-width:0; overflow-wrap:anywhere; }
+.caption-line span:last-child { flex:1; min-width:0; overflow:visible; overflow-wrap:anywhere; white-space:pre-wrap; }
 
 .readable-response {
   width: min(92vw, 560px);
@@ -280,13 +280,13 @@ input, select, textarea {
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
   box-shadow: 0 8px 24px rgba(0,0,0,.08);
-  contain: layout paint;
   font-size: 13px;
   line-height: 18px;
   text-align: center;
   color: var(--text);
-  max-height: min(132px, 19vh);
-  overflow: hidden;
+  max-height: min(38vh, 360px);
+  overflow-y: auto;
+  overflow-x: hidden;
   margin-top: 18px;
   pointer-events: none;
 }
@@ -319,6 +319,7 @@ input, select, textarea {
   margin: 0;
   padding: 18px max(14px, env(safe-area-inset-left)) 22px;
   overflow-y: auto;
+  overflow-x: hidden;
   text-align: left;
   pointer-events: auto;
   cursor: pointer;
