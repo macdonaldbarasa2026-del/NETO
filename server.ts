@@ -5,6 +5,7 @@ import { initializeApp, getApps, cert } from "firebase-admin/app";
 import { GoogleGenAI } from "@google/genai";
 
 let ai: GoogleGenAI | null = null;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 if (process.env.GEMINI_API_KEY) {
   ai = new GoogleGenAI({
     apiKey: process.env.GEMINI_API_KEY,
@@ -646,7 +647,7 @@ async function startServer() {
       res.setHeader("Transfer-Encoding", "chunked");
 
       const responseStream = await ai.models.generateContentStream({
-        model: "gemini-3.1-flash",
+        model: GEMINI_MODEL,
         contents,
         config: {
           tools: isToolResult || !safeClientContext.nativeCapabilities ? [{ googleSearch: {} }] : [
@@ -717,7 +718,7 @@ Client context: ${JSON.stringify(safeClientContext)}`,
     } catch (error: any) {
       const isRateLimit = error?.status === 429 || String(error?.message || "").includes("429");
       if (!isRateLimit) {
-        console.error("Error in /api/chat-stream:", error);
+        console.error("[NETO AI ERROR]", { name: error?.name, message: error?.message, stack: error?.stack, provider: req.body?.mode === "pro" ? "openai" : "gemini", model: req.body?.mode === "pro" ? (process.env.OPENAI_PRO_MODEL || "gpt-4o-mini") : GEMINI_MODEL, headersSent: res.headersSent });
       }
       const errorMsg = isRateLimit ? "Sorry, you have reached the limit. Please try again later." : "Sorry, my systems are currently overloaded. Please try again in a moment.";
       if (!res.headersSent) res.status(isRateLimit ? 429 : 500).json({ error: errorMsg });
