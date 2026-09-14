@@ -310,18 +310,21 @@ input, select, textarea {
 }
 .caption-focus .orb-caption {
   position: absolute;
-  left: max(12px, env(safe-area-inset-left));
-  right: max(12px, env(safe-area-inset-right));
+  top: max(64px, calc(env(safe-area-inset-top) + 58px));
   bottom: max(196px, calc(env(safe-area-inset-bottom) + 184px));
+  left: 0;
+  right: 0;
   width: auto;
-  max-height: min(54vh, 430px);
+  max-height: none;
   margin: 0;
-  padding: 14px 10px;
+  padding: 18px max(14px, env(safe-area-inset-left)) 22px;
   overflow-y: auto;
   text-align: left;
   pointer-events: auto;
   cursor: pointer;
-  transition: bottom .45s ease, max-height .45s ease, padding .3s ease;
+  border-radius: 0 0 26px 26px;
+  box-shadow: 0 14px 34px rgba(0,0,0,.10);
+  transition: top .45s ease, bottom .45s ease, padding .3s ease;
 }
 .caption-focus .caption-line {
   width: min(82%, 390px);
@@ -354,8 +357,8 @@ input, select, textarea {
     transform: translateX(-50%) scale(.36);
   }
   .caption-focus .orb-caption {
+    top: max(62px, calc(env(safe-area-inset-top) + 56px));
     bottom: max(182px, calc(env(safe-area-inset-bottom) + 170px));
-    max-height: min(55vh, 390px);
   }
 }
 
