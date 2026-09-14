@@ -199,6 +199,7 @@ export default function App() {
   const intentionalStopRef = useRef(false);
   const liveOutputTextRef = useRef("");
   const captionLinesRef = useRef<CaptionLine[]>([]);
+  const captionScrollRef = useRef<HTMLDivElement | null>(null);
   const captionIdRef = useRef(0);
 
   const updateLiveCaption = useCallback((speaker: CaptionSpeaker, text: string, options: { final?: boolean; replace?: boolean } = {}) => {
@@ -211,7 +212,7 @@ export default function App() {
       const value = options.replace ? clean : (last.text + " " + clean).replace(/\s+/g, " ").trim();
       next = [...current.slice(0, -1), { ...last, text: value, final: options.final }];
     } else {
-      next = [...current.slice(-5), { id: ++captionIdRef.current, speaker, text: clean, final: options.final }];
+      next = [...current.slice(-23), { id: ++captionIdRef.current, speaker, text: clean, final: options.final }];
     }
     captionLinesRef.current = next;
     setCaptionLines(next);
@@ -1082,6 +1083,12 @@ export default function App() {
     setter(true);
   }, []);
 
+  useEffect(() => {
+    const container = captionScrollRef.current;
+    if (!container || !captionFocusOpen) return;
+    container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+  }, [captionFocusOpen, captionLines]);
+
   const statusText = status === "listening" ? "You are speaking..." : status === "thinking" ? "Neto is thinking..." : status === "speaking" ? "Neto is speaking..." : "";
   const themeData = THEMES.find(t => t.id === theme)!;
 
@@ -1146,8 +1153,8 @@ export default function App() {
             <div className="min-w-0"><span className="identity-eyebrow">Speaking with</span><strong>{currentUser?.displayName || "Guest"}</strong></div>
           </div>}
         </div>
-        {captionsEnabled && captionLines.length > 0 && <div className={`orb-caption ${captionFocusOpen ? "caption-focus-panel" : ""}`} aria-label="Live captions" role="button" tabIndex={0} aria-pressed={captionFocusOpen} aria-live="polite" onClick={() => setCaptionFocusOpen(v => !v)} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setCaptionFocusOpen(v => !v); } }}>
-          {captionLines.slice(-3).map(line => <div className={`caption-line caption-${line.speaker} ${line.final ? "is-final" : "is-live"}`} key={line.id}>
+        {captionsEnabled && captionLines.length > 0 && <div ref={captionScrollRef} className={`orb-caption ${captionFocusOpen ? "caption-focus-panel" : ""}`} aria-label="Live captions" role="button" tabIndex={0} aria-pressed={captionFocusOpen} aria-live="polite" onClick={() => setCaptionFocusOpen(v => !v)} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setCaptionFocusOpen(v => !v); } }}>
+          {captionLines.map(line => <div className={`caption-line caption-${line.speaker} ${line.final ? "is-final" : "is-live"}`} key={line.id}>
             <span className="caption-speaker">{line.speaker === "human" ? "You" : "Neto"}</span>
             <span><WordReveal text={line.text} active={!line.final} />{!line.final && <span className="typing-cursor" aria-hidden="true">▌</span>}</span>
           </div>)}
