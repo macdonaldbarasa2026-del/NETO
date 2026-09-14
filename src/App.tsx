@@ -212,7 +212,7 @@ export default function App() {
       const value = options.replace ? clean : (last.text + " " + clean).replace(/\s+/g, " ").trim();
       next = [...current.slice(0, -1), { ...last, text: value, final: options.final }];
     } else {
-      next = [...current.slice(-23), { id: ++captionIdRef.current, speaker, text: clean, final: options.final }];
+      next = [...current, { id: ++captionIdRef.current, speaker, text: clean, final: options.final }];
     }
     captionLinesRef.current = next;
     setCaptionLines(next);
@@ -1156,7 +1156,7 @@ export default function App() {
         {captionsEnabled && captionLines.length > 0 && <div ref={captionScrollRef} className={`orb-caption ${captionFocusOpen ? "caption-focus-panel" : ""}`} aria-label="Live captions" role="button" tabIndex={0} aria-pressed={captionFocusOpen} aria-live="polite" onClick={() => setCaptionFocusOpen(v => !v)} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setCaptionFocusOpen(v => !v); } }}>
           {captionLines.map(line => <div className={`caption-line caption-${line.speaker} ${line.final ? "is-final" : "is-live"}`} key={line.id}>
             <span className="caption-speaker">{line.speaker === "human" ? "You" : "Neto"}</span>
-            <span><WordReveal text={line.text} active={!line.final} />{!line.final && <span className="typing-cursor" aria-hidden="true">▌</span>}</span>
+            <span>{line.text}</span>
           </div>)}
         </div>}
         <div className="voice-hint mt-6 sm:mt-10 text-center max-w-[300px]"><p className="text-[12.5px] sm:text-[13px] leading-[18px] font-medium" style={{color:"var(--muted)"}}>{status==="idle"?"Tap the orb to speak":status==="listening"?"Listening — speak naturally · tap orb to end":status==="thinking"?"Neto is preparing a reply":"Speaking — tap orb to end"}</p></div>
