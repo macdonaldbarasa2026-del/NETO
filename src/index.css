@@ -291,6 +291,74 @@ input, select, textarea {
   pointer-events: none;
 }
 
+.voice-stage {
+  position: relative;
+  transition: padding .42s ease;
+}
+
+/* Focused captions keep the whole conversation visible while the orb rests
+   near the lower-middle of the phone, like a compact voice control. */
+.caption-focus .voice-hint { opacity: 0; pointer-events: none; }
+.caption-focus .orb-reactive {
+  position: absolute;
+  left: 50%;
+  bottom: max(126px, calc(env(safe-area-inset-bottom) + 116px));
+  z-index: 5;
+  transform: translateX(-50%) scale(.42);
+  transform-origin: center bottom;
+  transition: transform .45s cubic-bezier(.22, 1, .36, 1), bottom .45s ease;
+}
+.caption-focus .orb-caption {
+  position: absolute;
+  left: max(12px, env(safe-area-inset-left));
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(196px, calc(env(safe-area-inset-bottom) + 184px));
+  width: auto;
+  max-height: min(54vh, 430px);
+  margin: 0;
+  padding: 14px 10px;
+  overflow-y: auto;
+  text-align: left;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: bottom .45s ease, max-height .45s ease, padding .3s ease;
+}
+.caption-focus .caption-line {
+  width: min(82%, 390px);
+  margin: 5px 0;
+  padding: 9px 11px;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface-solid) 92%, transparent);
+  box-shadow: 0 5px 16px rgba(0,0,0,.06);
+}
+.caption-focus .caption-ai {
+  margin-right: auto;
+  text-align: left;
+  border-bottom-left-radius: 5px;
+}
+.caption-focus .caption-human {
+  margin-left: auto;
+  flex-direction: row-reverse;
+  text-align: right;
+  border-bottom-right-radius: 5px;
+  background: var(--accent-soft);
+}
+.caption-focus .caption-human .caption-speaker { color: var(--accent); }
+.caption-focus .caption-line:not(:last-child) { opacity: .72; }
+
+@media (max-width: 520px) {
+  .caption-focus .orb-reactive {
+    bottom: max(116px, calc(env(safe-area-inset-bottom) + 106px));
+    transform: translateX(-50%) scale(.36);
+  }
+  .caption-focus .orb-caption {
+    bottom: max(182px, calc(env(safe-area-inset-bottom) + 170px));
+    max-height: min(55vh, 390px);
+  }
+}
+
 @keyframes orbSparkleFloat {
   0%,100% { transform: translate3d(0, 5px, 0) scale(.55) rotate(0deg); opacity: .16; }
   18% { opacity: .85; }

@@ -154,6 +154,7 @@ export default function App() {
   const [isInstalled, setIsInstalled] = useState(false);
   const [installDismissed, setInstallDismissed] = useState(() => localStorage.getItem("voice-orb-install-dismissed") === "1");
   const [captionsEnabled, setCaptionsEnabled] = useState(true);
+  const [captionFocusOpen, setCaptionFocusOpen] = useState(false);
   const [showIdentityCard, setShowIdentityCard] = useState(() => localStorage.getItem("neto-show-identity-card") !== "0");
   const [captionLines, setCaptionLines] = useState<CaptionLine[]>([]);
   const [endConfirmOpen, setEndConfirmOpen] = useState(false);
@@ -562,7 +563,7 @@ export default function App() {
         try {
           const msg = JSON.parse(event.data);
           if (msg.audio) playLivePcm(msg.audio);
-          if (msg.error) { setTranscript(msg.error); setStatus("idle"); return; }
+          if (msg.error) { setTranscript(msg.error); disconnectLive(); setStatus("idle"); return; }
           if (msg.listening) setStatus("listening");
           if (msg.thinking) setStatus("thinking");
           if (msg.interrupted) {
@@ -811,57 +812,43 @@ export default function App() {
 
       if (reader) {
         let buffer = "";
-        while (true) {
-          const { done, value } = await reader.read(); if (done) break;
-          const chunk = decoder.decode(value, { stream: true });
-          buffer += chunk;
-
-          const parts = buffer.split("__NETO_TOOL_CALL__:");
-          if (parts.length > 1) {
-            // Text before the first tool call
-            if (parts[0]) {
-              fullResponse += parts[0];
-              updateLiveCaption("ai", parts[0]);
-              setChatHistory(prev => {
-                const last = prev[prev.length - 1];
-                if (last && last.role === "model") {
-                  return [...prev.slice(0, -1), { ...last, parts: [{ text: fullResponse }] }];
-                }
-                return [...prev, { role: "model", parts: [{ text: fullResponse }] }];
-              });
+        const toolMarker = "__NETO_TOOL_CALL__:";
+        const appendText = (text: string) => {
+          if (!text) return;
+          fullResponse += text;
+          updateLiveCaption("ai", text);
+          setChatHistory(prev => {
+            const last = prev[prev.length - 1];
+            if (last && last.role === "model") return [...prev.slice(0, -1), { ...last, parts: [{ text: fullResponse }] }];
+            return [...prev, { role: "model", parts: [{ text: fullResponse }] }];
+          });
+        };
+        const consume = (flush = false) => {
+          while (buffer) {
+            const markerIndex = buffer.indexOf(toolMarker);
+            if (markerIndex === -1) {
+              const keep = flush ? 0 : Math.min(toolMarker.length - 1, buffer.length);
+              appendText(buffer.slice(0, buffer.length - keep));
+              buffer = keep ? buffer.slice(-keep) : "";
+              return;
             }
-
-            // Process tool calls
-            for (let i = 1; i < parts.length; i++) {
-              const remaining = parts[i];
-              const newlineIndex = remaining.indexOf("\n");
-              if (newlineIndex !== -1) {
-                const jsonStr = remaining.slice(0, newlineIndex);
-                try {
-                  pendingToolCall = JSON.parse(jsonStr);
-                  buffer = remaining.slice(newlineIndex + 1);
-                } catch (e) {
-                  console.error("Tool call parse error", e);
-                }
-              } else {
-                // Wait for the rest of the JSON
-                buffer = "__NETO_TOOL_CALL__:" + remaining;
-                break;
-              }
-            }
-          } else {
-            fullResponse += chunk;
-            updateLiveCaption("ai", chunk);
-            setChatHistory(prev => {
-              const last = prev[prev.length - 1];
-              if (last && last.role === "model") {
-                return [...prev.slice(0, -1), { ...last, parts: [{ text: fullResponse }] }];
-              }
-              return [...prev, { role: "model", parts: [{ text: fullResponse }] }];
-            });
-            buffer = "";
+            appendText(buffer.slice(0, markerIndex));
+            buffer = buffer.slice(markerIndex + toolMarker.length);
+            const newlineIndex = buffer.indexOf("\n");
+            if (newlineIndex === -1) return;
+            const jsonStr = buffer.slice(0, newlineIndex);
+            buffer = buffer.slice(newlineIndex + 1);
+            try { pendingToolCall = JSON.parse(jsonStr); } catch { appendText(toolMarker + jsonStr + "\n"); }
           }
+        };
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          consume();
         }
+        buffer += decoder.decode();
+        consume(true);
       }
 
       if (pendingToolCall) {
@@ -1077,11 +1064,13 @@ export default function App() {
 
   useEffect(() => {
     const onPopState = () => {
-      setMenuOpen(false); setSettingsOpen(false); setHistoryOpen(false); setAboutOpen(false); setInstallOpen(false); setClearHistoryConfirmOpen(false); setEndConfirmOpen(false);
+      setMenuOpen(false); setSettingsOpen(false); setHistoryOpen(false); setDeviceOpen(false); setAboutOpen(false); setInstallOpen(false); setClearHistoryConfirmOpen(false); setEndConfirmOpen(false);
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
+
+  useEffect(() => () => stopEverything(), [stopEverything]);
 
   const closePanel = useCallback((setter: (value: boolean) => void) => {
     setter(false);
@@ -1097,7 +1086,7 @@ export default function App() {
   const themeData = THEMES.find(t => t.id === theme)!;
 
   return (
-    <div className="relative w-full min-h-[100dvh] overflow-hidden select-none" style={{ background: "var(--bg)", color: "var(--text)" }}>
+    <div className={`relative w-full min-h-[100dvh] overflow-hidden select-none ${captionFocusOpen ? "caption-focus-open" : ""}`} style={{ background: "var(--bg)", color: "var(--text)" }}>
       <style>{`
         @keyframes breatheIdle {0%,100%{transform:scale(1)}50%{transform:scale(1.025)}}
         @keyframes breatheListening {0%,100%{transform:scale(1.035)}50%{transform:scale(1.105)}}
@@ -1114,7 +1103,7 @@ export default function App() {
         <button aria-label="Open menu" onClick={() => openPanel(setMenuOpen)} className="w-11 h-11 sm:w-12 sm:h-12 rounded-full flex items-center justify-center shadow-sm border active:scale-95 transition-transform" style={{ background:"var(--surface-solid)", borderColor:"var(--border)" }}><Menu className="w-5 h-5" /></button>
         <div className="flex items-center gap-2 sm:gap-3">
           <button aria-label={isMuted ? "Unmute AI voice" : "Mute AI voice"} onClick={() => { setIsMuted(v => !v); if (!isMuted) window.speechSynthesis?.cancel(); }} className="w-11 h-11 sm:w-12 sm:h-12 rounded-full shadow-sm flex items-center justify-center border active:scale-95 transition-transform" style={{ background:isMuted?"rgba(239,68,68,.12)":"var(--surface-solid)", borderColor:"var(--border)" }}>{isMuted?<VolumeX className="w-5 h-5 text-red-500"/>:<Volume2 className="w-5 h-5"/>}</button>
-          <button aria-label="Toggle captions" onClick={() => setCaptionsEnabled(v => !v)} className="w-11 h-11 sm:w-12 sm:h-12 rounded-full flex items-center justify-center shadow-sm border active:scale-95 transition-transform" style={{ background:captionsEnabled?"var(--accent-soft)":"var(--surface-solid)", borderColor:"var(--border)" }}><span className="text-xs font-semibold">CC</span></button>
+          <button aria-label={captionFocusOpen ? "Exit focused captions" : "Open focused captions"} onClick={() => { if (!captionsEnabled) setCaptionsEnabled(true); setCaptionFocusOpen(v => captionsEnabled ? !v : true); }} className="w-11 h-11 sm:w-12 sm:h-12 rounded-full flex items-center justify-center shadow-sm border active:scale-95 transition-transform" style={{ background:captionsEnabled?"var(--accent-soft)":"var(--surface-solid)", borderColor:"var(--border)" }}><span className="text-xs font-semibold">CC</span></button>
           <button aria-label="Open settings" onClick={() => openPanel(setSettingsOpen)} className="w-11 h-11 sm:w-12 sm:h-12 rounded-full flex items-center justify-center shadow-sm border active:scale-95 transition-transform" style={{ background:"var(--surface-solid)", borderColor:"var(--border)" }}><Settings className="w-5 h-5"/></button>
         </div>
       </div>
@@ -1126,7 +1115,7 @@ export default function App() {
         </div>
       )}
 
-      <div className="flex flex-col items-center justify-center h-full min-h-[100dvh] px-4 pt-[max(64px,calc(env(safe-area-inset-top)+54px))] pb-[max(88px,calc(env(safe-area-inset-bottom)+76px))] select-none">
+      <div className={`voice-stage flex flex-col items-center justify-center h-full min-h-[100dvh] px-4 pt-[max(64px,calc(env(safe-area-inset-top)+54px))] pb-[max(88px,calc(env(safe-area-inset-bottom)+76px))] select-none ${captionFocusOpen ? "caption-focus" : ""}`}>
         <div className="h-6 mb-3 sm:mb-6 flex items-center justify-center">{statusText ? <span className="text-[12.5px] sm:text-[13px] tracking-wide font-medium px-3 py-1 rounded-full backdrop-blur border" style={{background:"var(--surface)",borderColor:"var(--border)",color:"var(--muted)"}}>{statusText}</span> : <span className="text-[13px] opacity-0">idle</span>}</div>
         <div className={videoConversationActive ? "mb-4 w-[min(360px,82vw)] overflow-hidden rounded-2xl border shadow-lg" : "hidden"} style={{borderColor:"var(--border)",background:"var(--surface-solid)"}}><div className="relative"><video ref={cameraVideoRef} muted playsInline className={`block w-full aspect-video object-cover ${cameraFacing === "user" ? "-scale-x-100" : ""}`}/><button aria-label="Switch front or back camera" onClick={switchCamera} className="absolute right-2 top-2 w-9 h-9 rounded-full flex items-center justify-center text-white bg-black/55 backdrop-blur active:scale-95"><RotateCcw className="w-4 h-4"/></button></div><div className="flex items-center gap-2 px-3 py-2 text-xs font-medium" style={{color:"var(--muted)"}}><Camera className="w-3.5 h-3.5"/> Gemini is seeing your camera</div></div>
         <div className="relative flex items-center justify-center orb-reactive" style={{ "--orb-energy": orbEnergy } as CSSProperties}>
@@ -1157,13 +1146,13 @@ export default function App() {
             <div className="min-w-0"><span className="identity-eyebrow">Speaking with</span><strong>{currentUser?.displayName || "Guest"}</strong></div>
           </div>}
         </div>
-        {captionsEnabled && captionLines.length > 0 && <div className="orb-caption" aria-label="Live captions" role="status" aria-live="polite">
+        {captionsEnabled && captionLines.length > 0 && <div className={`orb-caption ${captionFocusOpen ? "caption-focus-panel" : ""}`} aria-label="Live captions" role="button" tabIndex={0} aria-pressed={captionFocusOpen} aria-live="polite" onClick={() => setCaptionFocusOpen(v => !v)} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setCaptionFocusOpen(v => !v); } }}>
           {captionLines.slice(-3).map(line => <div className={`caption-line caption-${line.speaker} ${line.final ? "is-final" : "is-live"}`} key={line.id}>
             <span className="caption-speaker">{line.speaker === "human" ? "You" : "Neto"}</span>
             <span><WordReveal text={line.text} active={!line.final} />{!line.final && <span className="typing-cursor" aria-hidden="true">▌</span>}</span>
           </div>)}
         </div>}
-        <div className="mt-6 sm:mt-10 text-center max-w-[300px]"><p className="text-[12.5px] sm:text-[13px] leading-[18px] font-medium" style={{color:"var(--muted)"}}>{status==="idle"?"Tap the orb to speak":status==="listening"?"Listening — speak naturally · tap orb to end":status==="thinking"?"Neto is preparing a reply":"Speaking — tap orb to end"}</p></div>
+        <div className="voice-hint mt-6 sm:mt-10 text-center max-w-[300px]"><p className="text-[12.5px] sm:text-[13px] leading-[18px] font-medium" style={{color:"var(--muted)"}}>{status==="idle"?"Tap the orb to speak":status==="listening"?"Listening — speak naturally · tap orb to end":status==="thinking"?"Neto is preparing a reply":"Speaking — tap orb to end"}</p></div>
       </div>
 
       <div className="absolute bottom-0 left-0 right-0 z-20 px-3 sm:px-6 pb-[max(12px,env(safe-area-inset-bottom))] pt-2" style={{background:"linear-gradient(to top,var(--bg) 60%,transparent)"}}>

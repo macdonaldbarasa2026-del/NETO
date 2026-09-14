@@ -42,6 +42,7 @@ async function startServer() {
   const requestWindowMs = 10 * 60 * 1000;
   const requestLimit = 40;
   const requestBuckets = new Map<string, { count: number; startedAt: number }>();
+  let requestsSinceCleanup = 0;
 
   // The API is deliberately same-origin. API credentials stay on this server and
   // should never be exposed to arbitrary browser origins.
@@ -56,6 +57,13 @@ async function startServer() {
   app.use(express.json({ limit: "2mb" }));
 
   const rateLimitChat = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (++requestsSinceCleanup >= 100) {
+      requestsSinceCleanup = 0;
+      const cutoff = Date.now() - requestWindowMs;
+      for (const [key, value] of requestBuckets) {
+        if (value.startedAt < cutoff) requestBuckets.delete(key);
+      }
+    }
     const forwarded = req.headers["x-forwarded-for"];
     const ip = (Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(",")[0])?.trim() || req.socket.remoteAddress || "unknown";
     const now = Date.now();
