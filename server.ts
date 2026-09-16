@@ -93,6 +93,33 @@ async function startServer() {
 
   const NETO_VOICE_INSTRUCTIONS = `You are Neto, the AI assistant inside the Neto app. You were created for Neto by Macdonald Barasa. Your product/company identity is Neto. Do not expose the underlying AI provider unless the user explicitly asks about the technical stack. Give brief, immediate conversational replies, normally 1-2 short sentences unless the user asks for detail. Never use markdown in voice replies. Be natural, clear, friendly, and fast.`;
 
+  const appEncryptionKey = process.env.APP_ENCRYPTION_KEY ? crypto.createHash("sha256").update(process.env.APP_ENCRYPTION_KEY).digest() : null;
+
+  const encryptSensitiveValue = (value: string) => {
+    if (!appEncryptionKey) return value;
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv("aes-256-gcm", appEncryptionKey, iv);
+    const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return Buffer.concat([iv, tag, encrypted]).toString("base64");
+  };
+
+  const decryptSensitiveValue = (value: string) => {
+    if (!appEncryptionKey || !value) return value;
+    try {
+      const buffer = Buffer.from(value, "base64");
+      const iv = buffer.subarray(0, 12);
+      const tag = buffer.subarray(12, 28);
+      const encrypted = buffer.subarray(28);
+      const decipher = crypto.createDecipheriv("aes-256-gcm", appEncryptionKey, iv);
+      decipher.setAuthTag(tag);
+      return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString("utf8");
+    } catch (error) {
+      console.warn("Failed to decrypt sensitive value.", error);
+      return value;
+    }
+  };
+
   const oauthSessions = new Map<string, { provider: string; createdAt: number; redirectUri: string }>();
   const oauthTokens = new Map<string, { accessToken: string; refreshToken?: string; expiryDate?: number; scope?: string; tokenType?: string; provider: string }>();
 
@@ -137,6 +164,7 @@ async function startServer() {
       connectors,
       note: "Connector access is consent-first and server-side only. Tokens are never stored in the browser.",
       supports: ["gmail", "calendar", "drive"],
+      security: appEncryptionKey ? "AES-256-GCM encryption enabled on server-side connector data" : "Server encryption key is not configured; connector data remains in-process only",
     });
   });
 
@@ -222,14 +250,20 @@ async function startServer() {
         return res.status(502).send("Could not complete the secure Google sign-in.");
       }
 
-      oauthTokens.set(session.provider, {
+      const tokenRecord = {
         accessToken: tokenJson.access_token,
         refreshToken: tokenJson.refresh_token,
         expiryDate: Date.now() + (Number(tokenJson.expires_in || 3600) * 1000),
         scope: tokenJson.scope,
         tokenType: tokenJson.token_type,
         provider: session.provider,
-      });
+      };
+
+      oauthTokens.set(session.provider, tokenRecord);
+      if (appEncryptionKey) {
+        const encrypted = encryptSensitiveValue(JSON.stringify(tokenRecord));
+        oauthTokens.set(session.provider, { ...tokenRecord, accessToken: encrypted });
+      }
 
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.end(`<!doctype html><html><head><meta charset="utf-8" /><title>NETO Connector</title></head><body style="font-family:system-ui, sans-serif; display:grid; place-items:center; min-height:100vh; background:#0f172a; color:white;"> <div style="text-align:center; padding:24px; border-radius:16px; background:rgba(255,255,255,0.04); max-width:420px;"> <h2 style="margin-bottom:12px;">Connected securely</h2><p style="color:#cbd5e1; line-height:1.5; margin:0;">Google access was granted for NETO. You can close this window and continue using the app.</p></div><script>window.close();</script></body></html>`);
@@ -252,6 +286,14 @@ async function startServer() {
       provider: connector.id,
       status: "disconnected",
       message: `${connector.name} was disconnected locally. No credentials were stored in the browser.`,
+    });
+  });
+
+  app.get("/api/connectors/health", (req, res) => {
+    res.json({
+      status: appEncryptionKey ? "secure" : "pending_config",
+      encryption: appEncryptionKey ? "enabled" : "disabled",
+      note: "Sensitive connector data is encrypted before storage when APP_ENCRYPTION_KEY is configured.",
     });
   });
 

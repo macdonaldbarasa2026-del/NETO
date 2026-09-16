@@ -112,6 +112,7 @@ export default function App() {
   const [clearHistoryConfirmOpen, setClearHistoryConfirmOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
+  const [connectorsOpen, setConnectorsOpen] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isMicMuted, setIsMicMuted] = useState(false);
   const [voice, setVoice] = useState("Sky");
@@ -1333,6 +1334,55 @@ export default function App() {
         <nav className="p-3 flex flex-col gap-1.5"><Action icon={<Plus/>} text="New chat" onClick={()=>{setMenuOpen(false);intentionalStopRef.current=true;keepListeningRef.current=false;stopEverything();setTranscript("");setChatHistory([])}}/><Action icon={<Clock/>} text="History" onClick={()=>{setMenuOpen(false);openPanel(setHistoryOpen)}}/><Action icon={<Smartphone/>} text="Device" onClick={()=>{setMenuOpen(false);openPanel(setDeviceOpen)}}/><Action icon={<Settings/>} text="Settings" onClick={()=>{setMenuOpen(false);openPanel(setSettingsOpen)}}/><Action icon={<UserRound/>} text="About creator" onClick={()=>{setMenuOpen(false);openPanel(setAboutOpen)}}/><Action icon={<Download/>} text={isInstalled?"App installed":"Install app"} disabled={isInstalled} onClick={()=>{setMenuOpen(false);openPanel(setInstallOpen)}}/></nav>
       </Overlay>
 
+      <Overlay open={connectorsOpen} onClose={()=>setConnectorsOpen(false)} bottom>
+        <div className="mx-auto max-w-[560px] px-6 pt-3 pb-[max(20px,env(safe-area-inset-bottom))]">
+          <div className="flex justify-center pb-4"><div className="w-9 h-1 rounded-full bg-black/10"/></div>
+          <div className="flex items-center justify-between mb-5">
+            <div className="flex items-center gap-3">
+              <button aria-label="Back to home" onClick={()=>setConnectorsOpen(false)} className="w-10 h-10 rounded-full flex items-center justify-center" style={{background:"var(--accent-soft)"}}><ArrowLeft className="w-4 h-4"/></button>
+              <div>
+                <h3 className="text-lg font-semibold">Connectors</h3>
+                <p className="text-xs" style={{color:"var(--muted)"}}>Secure access for Gmail, Calendar, and Drive</p>
+              </div>
+            </div>
+            <button onClick={()=>setConnectorsOpen(false)} className="w-8 h-8 rounded-full flex items-center justify-center" style={{background:"var(--accent-soft)"}}><X className="w-4 h-4"/></button>
+          </div>
+
+          <div className="space-y-3">
+            {connectors.length === 0 ? (
+              <div className="rounded-2xl border p-4" style={{background:"var(--surface)", borderColor:"var(--border)"}}>
+                <p className="text-sm font-medium">No connectors available yet.</p>
+                <p className="text-xs mt-1" style={{color:"var(--muted)"}}>The backend must be configured with Google OAuth credentials first.</p>
+              </div>
+            ) : connectors.map((connector) => (
+              <div key={connector.id} className="rounded-2xl border p-3" style={{background:"var(--surface)", borderColor:"var(--border)"}}>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold">{connector.name}</p>
+                    <p className="text-[11px] mt-1" style={{color:"var(--muted)"}}>{connector.status}</p>
+                  </div>
+                  <button
+                    onClick={() => void handleConnectorAction(connector.id, connector.connected ? "disconnect" : "connect")}
+                    disabled={connectorBusy}
+                    className="px-3 py-1.5 rounded-full text-[11px] font-semibold border"
+                    style={{background: connector.connected ? "var(--surface)" : "var(--accent)", color: connector.connected ? "var(--text)" : "#ffffff", borderColor: "var(--border)"}}
+                  >
+                    {connectorBusy ? "Working…" : connector.connected ? "Disconnect" : "Connect"}
+                  </button>
+                </div>
+                <p className="text-[11px] mt-2 leading-relaxed" style={{color:"var(--muted)"}}>{connector.privacy}</p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {connector.scopes.map((scope) => (
+                    <span key={scope} className="px-2 py-1 rounded-full text-[10px] uppercase tracking-wide" style={{background:"var(--accent-soft)", color:"var(--accent)"}}>{scope}</span>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {connectorMessage && <p className="text-[11px] leading-relaxed" style={{color:"var(--accent)"}}>{connectorMessage}</p>}
+          </div>
+        </div>
+      </Overlay>
+
       <Overlay open={deviceOpen} onClose={()=>closePanel(setDeviceOpen)} bottom>
         <div className="mx-auto max-w-[560px] px-6 pt-3 pb-[max(20px,env(safe-area-inset-bottom))]">
           <div className="flex justify-center pb-4"><div className="w-9 h-1 rounded-full bg-black/10"/></div>
@@ -1371,38 +1421,12 @@ export default function App() {
             </section>
 
             <section>
-              <label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Connectors</label>
-              <div className="mt-3 space-y-3 rounded-2xl border p-3" style={{background:"var(--surface)", borderColor:"var(--border)"}}>
-                <p className="text-[11px] leading-relaxed" style={{color:"var(--muted)"}}>
-                  All integrations are consent-first and stay on the secure server. No tokens are stored in the browser.
-                </p>
-                {connectors.length === 0 ? (
-                  <p className="text-xs" style={{color:"var(--muted)"}}>Loading connectors…</p>
-                ) : connectors.map((connector) => (
-                  <div key={connector.id} className="rounded-2xl border p-3" style={{background:"var(--surface-solid)", borderColor:"var(--border)"}}>
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-semibold">{connector.name}</p>
-                        <p className="text-[11px] mt-1" style={{color:"var(--muted)"}}>{connector.status}</p>
-                      </div>
-                      <button
-                        onClick={() => void handleConnectorAction(connector.id, connector.connected ? "disconnect" : "connect")}
-                        disabled={connectorBusy}
-                        className="px-3 py-1.5 rounded-full text-[11px] font-semibold border"
-                        style={{background: connector.connected ? "var(--surface)" : "var(--accent)", color: connector.connected ? "var(--text)" : "#ffffff", borderColor: "var(--border)"}}
-                      >
-                        {connectorBusy ? "Working…" : connector.connected ? "Disconnect" : "Connect"}
-                      </button>
-                    </div>
-                    <p className="text-[11px] mt-2 leading-relaxed" style={{color:"var(--muted)"}}>{connector.privacy}</p>
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {connector.scopes.map((scope) => (
-                        <span key={scope} className="px-2 py-1 rounded-full text-[10px] uppercase tracking-wide" style={{background:"var(--accent-soft)", color:"var(--accent)"}}>{scope}</span>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-                {connectorMessage && <p className="text-[11px] leading-relaxed" style={{color:"var(--accent)"}}>{connectorMessage}</p>}
+              <div className="flex items-center justify-between gap-3 rounded-2xl border p-3" style={{background:"var(--surface)", borderColor:"var(--border)"}}>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.14em]" style={{color:"var(--muted)"}}>Connectors</p>
+                  <p className="text-[11px] mt-1" style={{color:"var(--muted)"}}>Gmail, Calendar, Drive</p>
+                </div>
+                <button onClick={()=>setConnectorsOpen(true)} className="px-3 py-2 rounded-full text-[11px] font-semibold" style={{background:"var(--accent)", color:"#fff"}}>{connectors.length ? "Manage" : "Add"}</button>
               </div>
             </section>
 
