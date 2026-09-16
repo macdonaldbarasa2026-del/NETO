@@ -129,6 +129,76 @@ export default function App() {
   const [historySearchQuery, setHistorySearchQuery] = useState("");
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [hasStarted, setHasStarted] = useState(false);
+  const [connectors, setConnectors] = useState<{ id: string; name: string; connected: boolean; requiresConsent: boolean; scopes: string[]; privacy: string; status: string }[]>([]);
+  const [connectorMessage, setConnectorMessage] = useState("");
+  const [connectorBusy, setConnectorBusy] = useState(false);
+
+  const fetchConnectors = useCallback(async () => {
+    try {
+      const response = await fetch("/api/connectors/status");
+      if (!response.ok) return;
+      const data = await response.json();
+      if (Array.isArray(data?.connectors)) setConnectors(data.connectors);
+    } catch (error) {
+      console.warn("Failed to load connector status", error);
+    }
+  }, []);
+
+  const handleConnectorAction = useCallback(async (provider: string, action: "connect" | "disconnect") => {
+    setConnectorBusy(true);
+    setConnectorMessage("");
+    try {
+      if (action === "disconnect") {
+        const response = await fetch("/api/connectors/disconnect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        setConnectorMessage(payload?.message || "Connector disconnected.");
+        if (response.ok) await fetchConnectors();
+        return;
+      }
+
+      const response = await fetch("/api/connectors/oauth/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider }),
+      });
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        setConnectorMessage(payload?.message || "Connector setup is not available yet.");
+        return;
+      }
+
+      if (payload?.authUrl) {
+        const popup = window.open(payload.authUrl, "neto_connector", "width=520,height=700,noopener,noreferrer");
+        if (!popup) {
+          setConnectorMessage("Popup blocked. Please allow popups and try again.");
+          return;
+        }
+
+        const interval = window.setInterval(async () => {
+          if (popup.closed) {
+            window.clearInterval(interval);
+            await fetchConnectors();
+            setConnectorMessage("Google authorization completed. Your connector is now ready to use.");
+          }
+        }, 800);
+
+        setConnectorMessage(payload.message || "Secure sign-in opened. Complete the Google prompt to continue.");
+        return;
+      }
+
+      setConnectorMessage(payload?.message || "Connector flow started.");
+      if (response.ok) await fetchConnectors();
+    } catch (error: any) {
+      setConnectorMessage(error?.message || "Connector request failed.");
+    } finally {
+      setConnectorBusy(false);
+    }
+  }, [fetchConnectors]);
 
   const filteredChatHistory = useMemo(() => {
     if (!historySearchQuery.trim()) return chatHistory;
@@ -151,6 +221,10 @@ export default function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    void fetchConnectors();
+  }, [fetchConnectors]);
   const [installPrompt, setInstallPrompt] = useState<any>(null);
   const [isInstalled, setIsInstalled] = useState(false);
   const [installDismissed, setInstallDismissed] = useState(() => localStorage.getItem("voice-orb-install-dismissed") === "1");
@@ -1295,6 +1369,43 @@ export default function App() {
                 {aiMode === "normal" ? "Standard response mode with real-time voice streaming and multimodal capabilities." : "Advanced intelligence mode for deep reasoning and complex queries."}
               </p>
             </section>
+
+            <section>
+              <label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Connectors</label>
+              <div className="mt-3 space-y-3 rounded-2xl border p-3" style={{background:"var(--surface)", borderColor:"var(--border)"}}>
+                <p className="text-[11px] leading-relaxed" style={{color:"var(--muted)"}}>
+                  All integrations are consent-first and stay on the secure server. No tokens are stored in the browser.
+                </p>
+                {connectors.length === 0 ? (
+                  <p className="text-xs" style={{color:"var(--muted)"}}>Loading connectors…</p>
+                ) : connectors.map((connector) => (
+                  <div key={connector.id} className="rounded-2xl border p-3" style={{background:"var(--surface-solid)", borderColor:"var(--border)"}}>
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold">{connector.name}</p>
+                        <p className="text-[11px] mt-1" style={{color:"var(--muted)"}}>{connector.status}</p>
+                      </div>
+                      <button
+                        onClick={() => void handleConnectorAction(connector.id, connector.connected ? "disconnect" : "connect")}
+                        disabled={connectorBusy}
+                        className="px-3 py-1.5 rounded-full text-[11px] font-semibold border"
+                        style={{background: connector.connected ? "var(--surface)" : "var(--accent)", color: connector.connected ? "var(--text)" : "#ffffff", borderColor: "var(--border)"}}
+                      >
+                        {connectorBusy ? "Working…" : connector.connected ? "Disconnect" : "Connect"}
+                      </button>
+                    </div>
+                    <p className="text-[11px] mt-2 leading-relaxed" style={{color:"var(--muted)"}}>{connector.privacy}</p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {connector.scopes.map((scope) => (
+                        <span key={scope} className="px-2 py-1 rounded-full text-[10px] uppercase tracking-wide" style={{background:"var(--accent-soft)", color:"var(--accent)"}}>{scope}</span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                {connectorMessage && <p className="text-[11px] leading-relaxed" style={{color:"var(--accent)"}}>{connectorMessage}</p>}
+              </div>
+            </section>
+
             <section><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Account</label>
 <div className="mt-3 p-4 rounded-2xl border flex items-center justify-between" style={{background:"var(--surface)",borderColor:"var(--border)"}}>
   <div>

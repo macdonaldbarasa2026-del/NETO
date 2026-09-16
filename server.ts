@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import crypto from "node:crypto";
 import { createServer as createViteServer } from "vite";
 import { initializeApp, getApps, cert } from "firebase-admin/app";
 import { GoogleGenAI } from "@google/genai";
@@ -91,6 +92,168 @@ async function startServer() {
   const wss = new WebSocketServer({ server: httpServer, path: "/live" });
 
   const NETO_VOICE_INSTRUCTIONS = `You are Neto, the AI assistant inside the Neto app. You were created for Neto by Macdonald Barasa. Your product/company identity is Neto. Do not expose the underlying AI provider unless the user explicitly asks about the technical stack. Give brief, immediate conversational replies, normally 1-2 short sentences unless the user asks for detail. Never use markdown in voice replies. Be natural, clear, friendly, and fast.`;
+
+  const oauthSessions = new Map<string, { provider: string; createdAt: number; redirectUri: string }>();
+  const oauthTokens = new Map<string, { accessToken: string; refreshToken?: string; expiryDate?: number; scope?: string; tokenType?: string; provider: string }>();
+
+  const CONNECTOR_DEFINITIONS = [
+    {
+      id: "gmail",
+      name: "Gmail",
+      scopes: ["readonly:inbox", "drafts:write"],
+      privacy: "Reads only the mail you explicitly ask to review. Drafts stay in your account until you approve sending.",
+      connected: false,
+    },
+    {
+      id: "calendar",
+      name: "Google Calendar",
+      scopes: ["readonly:events", "events:write"],
+      privacy: "Shows upcoming events and drafts new ones only after you confirm the action.",
+      connected: false,
+    },
+    {
+      id: "drive",
+      name: "Google Drive",
+      scopes: ["readonly:files", "files:write"],
+      privacy: "Accesses only files you explicitly select. No background sync is performed.",
+      connected: false,
+    },
+  ] as const;
+
+  const getConnectorScopes = (provider: string) => {
+    const connector = CONNECTOR_DEFINITIONS.find((item) => item.id === provider);
+    return connector?.scopes ?? [];
+  };
+
+  app.get("/api/connectors/status", (req, res) => {
+    const connectors = CONNECTOR_DEFINITIONS.map((connector) => ({
+      ...connector,
+      connected: oauthTokens.has(connector.id),
+      requiresConsent: true,
+      status: process.env.GOOGLE_CLIENT_ID ? (oauthTokens.has(connector.id) ? "Connected securely" : "Secure OAuth ready") : "Server configuration required",
+    }));
+
+    res.json({
+      connectors,
+      note: "Connector access is consent-first and server-side only. Tokens are never stored in the browser.",
+      supports: ["gmail", "calendar", "drive"],
+    });
+  });
+
+  app.post("/api/connectors/oauth/start", async (req, res) => {
+    const provider = typeof req.body?.provider === "string" ? req.body.provider : "";
+    const connector = CONNECTOR_DEFINITIONS.find((item) => item.id === provider);
+
+    if (!connector) {
+      return res.status(400).json({ error: "Unsupported connector." });
+    }
+
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+      return res.status(501).json({
+        provider: connector.id,
+        status: "not_configured",
+        message: "Secure Google OAuth is not configured on this server yet. The app is ready for the backend setup, but no tokens or secrets are exposed to the browser.",
+      });
+    }
+
+    const state = crypto.randomBytes(18).toString("hex");
+    const redirectUri = `${process.env.APP_URL || "http://localhost:3000"}/api/connectors/oauth/callback`;
+    oauthSessions.set(state, { provider: connector.id, createdAt: Date.now(), redirectUri });
+
+    const scopeString = getConnectorScopes(connector.id).join(" ");
+    const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+    authUrl.searchParams.set("client_id", process.env.GOOGLE_CLIENT_ID);
+    authUrl.searchParams.set("redirect_uri", redirectUri);
+    authUrl.searchParams.set("response_type", "code");
+    authUrl.searchParams.set("scope", scopeString);
+    authUrl.searchParams.set("access_type", "offline");
+    authUrl.searchParams.set("prompt", "consent");
+    authUrl.searchParams.set("state", state);
+
+    return res.json({
+      provider: connector.id,
+      status: "oauth_ready",
+      authUrl: authUrl.toString(),
+      message: `Secure OAuth for ${connector.name} is ready. The user must approve the requested scopes before any mailbox or calendar action is executed.`,
+      scopes: connector.scopes,
+      privacy: connector.privacy,
+    });
+  });
+
+  app.get("/api/connectors/oauth/callback", async (req, res) => {
+    const { code, state, error } = req.query;
+
+    if (error) {
+      return res.status(400).send(`Authorization was denied: ${String(error)}`);
+    }
+
+    if (typeof code !== "string" || typeof state !== "string") {
+      return res.status(400).send("Invalid connector callback.");
+    }
+
+    const session = oauthSessions.get(state);
+    if (!session) {
+      return res.status(400).send("This OAuth request has expired or is invalid.");
+    }
+
+    oauthSessions.delete(state);
+
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+      return res.status(501).send("Google OAuth is not configured on this server.");
+    }
+
+    const redirectUri = session.redirectUri;
+    try {
+      const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          code,
+          client_id: process.env.GOOGLE_CLIENT_ID,
+          client_secret: process.env.GOOGLE_CLIENT_SECRET,
+          redirect_uri: redirectUri,
+          grant_type: "authorization_code",
+        }).toString(),
+      });
+
+      const tokenJson: any = await tokenResponse.json();
+      if (!tokenResponse.ok || !tokenJson.access_token) {
+        console.error("Google OAuth exchange failed:", tokenJson);
+        return res.status(502).send("Could not complete the secure Google sign-in.");
+      }
+
+      oauthTokens.set(session.provider, {
+        accessToken: tokenJson.access_token,
+        refreshToken: tokenJson.refresh_token,
+        expiryDate: Date.now() + (Number(tokenJson.expires_in || 3600) * 1000),
+        scope: tokenJson.scope,
+        tokenType: tokenJson.token_type,
+        provider: session.provider,
+      });
+
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.end(`<!doctype html><html><head><meta charset="utf-8" /><title>NETO Connector</title></head><body style="font-family:system-ui, sans-serif; display:grid; place-items:center; min-height:100vh; background:#0f172a; color:white;"> <div style="text-align:center; padding:24px; border-radius:16px; background:rgba(255,255,255,0.04); max-width:420px;"> <h2 style="margin-bottom:12px;">Connected securely</h2><p style="color:#cbd5e1; line-height:1.5; margin:0;">Google access was granted for NETO. You can close this window and continue using the app.</p></div><script>window.close();</script></body></html>`);
+    } catch (error) {
+      console.error("OAuth callback failed", error);
+      return res.status(500).send("A secure connector error occurred.");
+    }
+  });
+
+  app.post("/api/connectors/disconnect", (req, res) => {
+    const provider = typeof req.body?.provider === "string" ? req.body.provider : "";
+    const connector = CONNECTOR_DEFINITIONS.find((item) => item.id === provider);
+
+    if (!connector) {
+      return res.status(400).json({ error: "Unsupported connector." });
+    }
+
+    oauthTokens.delete(connector.id);
+    return res.json({
+      provider: connector.id,
+      status: "disconnected",
+      message: `${connector.name} was disconnected locally. No credentials were stored in the browser.`,
+    });
+  });
 
   const NETO_TOOLS = [
     {
