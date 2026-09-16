@@ -7,6 +7,19 @@ import { Menu, Settings, Plus, Clock, Mic, MicOff, Camera, Video, X, Send, Volum
 import { uploadAttachment, signInWithGoogle, signInWithNativeGoogleToken, logout, onAuthChange, saveConversation, loadRecentConversations, clearAllConversations } from "./lib/firebase";
 import { executeAndroidCommand, getAndroidCapabilities, isAndroidAction, parseAndroidCommand, type AndroidAction, type AndroidCommand, type AndroidCapabilities } from "./lib/androidControl";
 
+declare global {
+  interface Window {
+    NetoNative?: {
+      startVoice?: (language?: string) => string;
+      stopVoice?: () => void;
+      stopSpeaking?: () => void;
+      speak?: (text: string, speed?: number) => string;
+      signInWithGoogle?: () => string;
+      [key: string]: any;
+    };
+  }
+}
+
 type Status = "idle" | "listening" | "thinking" | "speaking";
 type Theme = "light" | "dark" | "midnight" | "warm" | "contrast";
 
