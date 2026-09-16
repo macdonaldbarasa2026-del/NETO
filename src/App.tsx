@@ -128,6 +128,7 @@ export default function App() {
   const [chatHistory, setChatHistory] = useState<Message[]>([]);
   const [historySearchQuery, setHistorySearchQuery] = useState("");
   const [currentUser, setCurrentUser] = useState<any>(null);
+  const [hasStarted, setHasStarted] = useState(false);
 
   const filteredChatHistory = useMemo(() => {
     if (!historySearchQuery.trim()) return chatHistory;
@@ -959,6 +960,7 @@ export default function App() {
   }, [isMicMuted, startListening, status]);
 
   const handleOrbTap = useCallback(() => {
+    setHasStarted(true);
     if (status === "listening" || isListeningRef.current) {
       const text = transcriptRef.current.trim(); stopEverything(); if (text) void handleMessage(text); setTranscript(""); transcriptRef.current = "";
     } else if (status === "speaking" || status === "thinking") { intentionalStopRef.current = true; keepListeningRef.current = false; stopEverything(); }
@@ -1108,10 +1110,6 @@ export default function App() {
 
       <div className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between px-4 sm:px-8 pt-[max(16px,env(safe-area-inset-top))] pb-4 select-none pointer-events-auto">
         <button aria-label="Open menu" onClick={() => openPanel(setMenuOpen)} className="w-11 h-11 sm:w-12 sm:h-12 rounded-full flex items-center justify-center shadow-sm border active:scale-95 transition-transform" style={{ background:"var(--surface-solid)", borderColor:"var(--border)" }}><Menu className="w-5 h-5" /></button>
-        <div className="neto-wordmark" aria-label="Neto AI assistant">
-          <span className="neto-mark">N</span>
-          <span><strong>NETO</strong><small>AI ASSISTANT</small></span>
-        </div>
         <div className="flex items-center gap-2 sm:gap-3">
           <button aria-label={isMuted ? "Unmute AI voice" : "Mute AI voice"} onClick={() => { setIsMuted(v => !v); if (!isMuted) window.speechSynthesis?.cancel(); }} className="w-11 h-11 sm:w-12 sm:h-12 rounded-full shadow-sm flex items-center justify-center border active:scale-95 transition-transform" style={{ background:isMuted?"rgba(239,68,68,.12)":"var(--surface-solid)", borderColor:"var(--border)" }}>{isMuted?<VolumeX className="w-5 h-5 text-red-500"/>:<Volume2 className="w-5 h-5"/>}</button>
           <button aria-label={captionFocusOpen ? "Exit focused captions" : "Open focused captions"} onClick={() => { if (!captionsEnabled) setCaptionsEnabled(true); setCaptionFocusOpen(v => captionsEnabled ? !v : true); }} className="w-11 h-11 sm:w-12 sm:h-12 rounded-full flex items-center justify-center shadow-sm border active:scale-95 transition-transform" style={{ background:captionsEnabled?"var(--accent-soft)":"var(--surface-solid)", borderColor:"var(--border)" }}><span className="text-xs font-semibold">CC</span></button>
@@ -1127,11 +1125,11 @@ export default function App() {
       )}
 
       <div className={`neto-stage voice-stage flex flex-col items-center justify-center h-full min-h-[100dvh] px-4 pt-[max(78px,calc(env(safe-area-inset-top)+68px))] pb-[max(96px,calc(env(safe-area-inset-bottom)+84px))] select-none ${captionFocusOpen ? "caption-focus" : ""}`}>
-        <div className="neto-intro text-center">
+        {!hasStarted && <div className="neto-intro text-center">
           <p className="neto-kicker">PRIVATE VOICE WORKSPACE</p>
           <h1>What can we work through?</h1>
           <p className="neto-subtitle">Speak naturally or type below. Neto is ready when you are.</p>
-        </div>
+        </div>}
         <div className="h-7 mt-5 mb-2 flex items-center justify-center">{statusText ? <span className="neto-status-pill"><span className="neto-status-dot" />{statusText}</span> : <span className="neto-ready"><span className="neto-status-dot" />Ready</span>}</div>
         <div className={videoConversationActive ? "mb-4 w-[min(360px,82vw)] overflow-hidden rounded-2xl border shadow-lg" : "hidden"} style={{borderColor:"var(--border)",background:"var(--surface-solid)"}}><div className="relative"><video ref={cameraVideoRef} muted playsInline className={`block w-full aspect-video object-cover ${cameraFacing === "user" ? "-scale-x-100" : ""}`}/><button aria-label="Switch front or back camera" onClick={switchCamera} className="absolute right-2 top-2 w-9 h-9 rounded-full flex items-center justify-center text-white bg-black/55 backdrop-blur active:scale-95"><RotateCcw className="w-4 h-4"/></button></div><div className="flex items-center gap-2 px-3 py-2 text-xs font-medium" style={{color:"var(--muted)"}}><Camera className="w-3.5 h-3.5"/> Gemini is seeing your camera</div></div>
         <div className="relative flex items-center justify-center orb-reactive" style={{ "--orb-energy": orbEnergy } as CSSProperties}>
@@ -1218,7 +1216,7 @@ export default function App() {
                   {!uploadingFile && <button aria-label="Remove attachment" onClick={()=>setImageAttachment(null)} className="w-7 h-7 rounded-full flex items-center justify-center shrink-0" style={{background:"var(--accent-soft)"}}><X className="w-3.5 h-3.5"/></button>}
                 </div>
               )}
-              <input aria-label="Message" maxLength={12000} value={draftText} onChange={e=>setDraftText(e.target.value)} onKeyDown={e=>{if(e.key==="Enter" && !e.shiftKey)submitText()}} placeholder={uploadingFile?`Uploading… ${uploadProgress}%`:status==="listening"?"Listening…":"Type a message…"} className="w-full bg-transparent outline-none text-base sm:text-[15px]" style={{color:"var(--text)"}} />
+              <input aria-label="Message" maxLength={12000} value={draftText} onChange={e=>{setHasStarted(true);setDraftText(e.target.value)}} onKeyDown={e=>{if(e.key==="Enter" && !e.shiftKey)submitText()}} placeholder={uploadingFile?`Uploading… ${uploadProgress}%`:status==="listening"?"Listening…":"Type a message…"} className="w-full bg-transparent outline-none text-base sm:text-[15px]" style={{color:"var(--text)"}} />
               {uploadingFile && <div className="absolute left-0 right-0 -bottom-1 h-1 overflow-hidden rounded-full" style={{background:"var(--accent-soft)"}}><div className="h-full transition-all" style={{width:`${uploadProgress}%`,background:"var(--accent)"}} /></div>}
               {draftText.trim() && !uploadingFile && (
                 <button aria-label="Send" onClick={submitText} className="absolute top-1/2 -translate-y-1/2 right-0 w-8 h-8 rounded-full flex items-center justify-center text-white active:scale-95 transition-transform" style={{background:"var(--accent)"}}>
@@ -1457,7 +1455,7 @@ export default function App() {
       </Overlay>
 
       <Overlay open={aboutOpen} onClose={()=>closePanel(setAboutOpen)} bottom>
-        <div className="mx-auto max-w-[560px] px-6 pt-3 pb-[max(20px,env(safe-area-inset-bottom))]"><div className="flex justify-center pb-4"><div className="w-9 h-1 rounded-full bg-black/10"/></div><div className="flex items-center gap-3"><button aria-label="Back to home" onClick={()=>closePanel(setAboutOpen)} className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{background:"var(--accent-soft)"}}><ArrowLeft className="w-4 h-4"/></button><div className="w-12 h-12 rounded-2xl flex items-center justify-center" style={{background:"linear-gradient(180deg,var(--orb-top),var(--orb-bottom))"}}><UserRound className="w-6 h-6"/></div><div><h3 className="text-lg font-semibold">About Neto</h3><p className="text-sm" style={{color:"var(--muted)"}}>Created by {CREATOR.name}</p></div></div><div className="mt-6 rounded-2xl p-4 border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><p className="text-sm leading-relaxed">Neto is the AI assistant and product identity of the app. The company/product identity is <strong>Neto</strong>, and the verified creator is <strong>{CREATOR.name}</strong>. Neto should describe itself using these verified facts and should not invent a different creator or product identity.</p></div></div>
+        <div className="mx-auto max-w-[560px] px-6 pt-3 pb-[max(20px,env(safe-area-inset-bottom))]"><div className="flex justify-center pb-4"><div className="w-9 h-1 rounded-full bg-black/10"/></div><div className="flex items-center gap-3"><button aria-label="Back to home" onClick={()=>closePanel(setAboutOpen)} className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{background:"var(--accent-soft)"}}><ArrowLeft className="w-4 h-4"/></button><div className="w-12 h-12 rounded-2xl flex items-center justify-center" style={{background:"linear-gradient(180deg,var(--orb-top),var(--orb-bottom))"}}><UserRound className="w-6 h-6"/></div><div><h3 className="text-lg font-semibold">About Neto</h3><p className="text-sm" style={{color:"var(--muted)"}}>Created by {CREATOR.name}</p></div></div><div className="mt-6 rounded-2xl p-4 border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><p className="text-sm leading-relaxed">Neto is the AI assistant and product identity of the app. The company/product identity is <strong>Neto</strong>, and the verified creator is <strong>{CREATOR.name}</strong>. Neto should describe itself using these verified facts and should not invent a different creator or product identity.</p></div><section className="mt-4 rounded-2xl p-4 border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><h4 className="text-sm font-semibold">App policy</h4><div className="mt-3 space-y-3 text-xs leading-relaxed" style={{color:"var(--muted)"}}><p><strong style={{color:"var(--text)"}}>Privacy.</strong> Neto uses conversation content to provide responses. Signed-in conversations and uploaded files may be stored so you can use history and attachments across sessions.</p><p><strong style={{color:"var(--text)"}}>Permissions.</strong> Microphone, camera, files, contacts, calls, messages, and accessibility access are requested only for the related feature. You control these permissions in your device or browser settings.</p><p><strong style={{color:"var(--text)"}}>Safety.</strong> AI responses can be incomplete or inaccurate. Review important information and confirm consequential device actions before proceeding.</p><p><strong style={{color:"var(--text)"}}>Control.</strong> You can stop voice sessions, remove attachments, clear saved history, sign out, or revoke permissions at any time.</p></div></section></div>
       </Overlay>
 
       <Overlay open={endConfirmOpen} onClose={()=>setEndConfirmOpen(false)} bottom>
