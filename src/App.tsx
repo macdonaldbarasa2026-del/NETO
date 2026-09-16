@@ -1093,7 +1093,7 @@ export default function App() {
   const themeData = THEMES.find(t => t.id === theme)!;
 
   return (
-    <div className={`relative w-full min-h-[100dvh] overflow-hidden select-none ${captionFocusOpen ? "caption-focus-open" : ""}`} style={{ background: "var(--bg)", color: "var(--text)" }}>
+    <div className={`neto-shell relative w-full min-h-[100dvh] overflow-hidden select-none ${captionFocusOpen ? "caption-focus-open" : ""}`} style={{ background: "var(--bg)", color: "var(--text)" }}>
       <style>{`
         @keyframes breatheIdle {0%,100%{transform:scale(1)}50%{transform:scale(1.025)}}
         @keyframes breatheListening {0%,100%{transform:scale(1.035)}50%{transform:scale(1.105)}}
@@ -1106,8 +1106,12 @@ export default function App() {
         @keyframes speakingWave {0%,100%{transform:scale(.95);opacity:.16}50%{transform:scale(1.28);opacity:.38}}
       `}</style>
 
-      <div className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between px-3 sm:px-6 pt-[max(12px,env(safe-area-inset-top))] pb-3 select-none pointer-events-auto">
+      <div className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between px-4 sm:px-8 pt-[max(16px,env(safe-area-inset-top))] pb-4 select-none pointer-events-auto">
         <button aria-label="Open menu" onClick={() => openPanel(setMenuOpen)} className="w-11 h-11 sm:w-12 sm:h-12 rounded-full flex items-center justify-center shadow-sm border active:scale-95 transition-transform" style={{ background:"var(--surface-solid)", borderColor:"var(--border)" }}><Menu className="w-5 h-5" /></button>
+        <div className="neto-wordmark" aria-label="Neto AI assistant">
+          <span className="neto-mark">N</span>
+          <span><strong>NETO</strong><small>AI ASSISTANT</small></span>
+        </div>
         <div className="flex items-center gap-2 sm:gap-3">
           <button aria-label={isMuted ? "Unmute AI voice" : "Mute AI voice"} onClick={() => { setIsMuted(v => !v); if (!isMuted) window.speechSynthesis?.cancel(); }} className="w-11 h-11 sm:w-12 sm:h-12 rounded-full shadow-sm flex items-center justify-center border active:scale-95 transition-transform" style={{ background:isMuted?"rgba(239,68,68,.12)":"var(--surface-solid)", borderColor:"var(--border)" }}>{isMuted?<VolumeX className="w-5 h-5 text-red-500"/>:<Volume2 className="w-5 h-5"/>}</button>
           <button aria-label={captionFocusOpen ? "Exit focused captions" : "Open focused captions"} onClick={() => { if (!captionsEnabled) setCaptionsEnabled(true); setCaptionFocusOpen(v => captionsEnabled ? !v : true); }} className="w-11 h-11 sm:w-12 sm:h-12 rounded-full flex items-center justify-center shadow-sm border active:scale-95 transition-transform" style={{ background:captionsEnabled?"var(--accent-soft)":"var(--surface-solid)", borderColor:"var(--border)" }}><span className="text-xs font-semibold">CC</span></button>
@@ -1122,8 +1126,13 @@ export default function App() {
         </div>
       )}
 
-      <div className={`voice-stage flex flex-col items-center justify-center h-full min-h-[100dvh] px-4 pt-[max(64px,calc(env(safe-area-inset-top)+54px))] pb-[max(88px,calc(env(safe-area-inset-bottom)+76px))] select-none ${captionFocusOpen ? "caption-focus" : ""}`}>
-        <div className="h-6 mb-3 sm:mb-6 flex items-center justify-center">{statusText ? <span className="text-[12.5px] sm:text-[13px] tracking-wide font-medium px-3 py-1 rounded-full backdrop-blur border" style={{background:"var(--surface)",borderColor:"var(--border)",color:"var(--muted)"}}>{statusText}</span> : <span className="text-[13px] opacity-0">idle</span>}</div>
+      <div className={`neto-stage voice-stage flex flex-col items-center justify-center h-full min-h-[100dvh] px-4 pt-[max(78px,calc(env(safe-area-inset-top)+68px))] pb-[max(96px,calc(env(safe-area-inset-bottom)+84px))] select-none ${captionFocusOpen ? "caption-focus" : ""}`}>
+        <div className="neto-intro text-center">
+          <p className="neto-kicker">PRIVATE VOICE WORKSPACE</p>
+          <h1>What can we work through?</h1>
+          <p className="neto-subtitle">Speak naturally or type below. Neto is ready when you are.</p>
+        </div>
+        <div className="h-7 mt-5 mb-2 flex items-center justify-center">{statusText ? <span className="neto-status-pill"><span className="neto-status-dot" />{statusText}</span> : <span className="neto-ready"><span className="neto-status-dot" />Ready</span>}</div>
         <div className={videoConversationActive ? "mb-4 w-[min(360px,82vw)] overflow-hidden rounded-2xl border shadow-lg" : "hidden"} style={{borderColor:"var(--border)",background:"var(--surface-solid)"}}><div className="relative"><video ref={cameraVideoRef} muted playsInline className={`block w-full aspect-video object-cover ${cameraFacing === "user" ? "-scale-x-100" : ""}`}/><button aria-label="Switch front or back camera" onClick={switchCamera} className="absolute right-2 top-2 w-9 h-9 rounded-full flex items-center justify-center text-white bg-black/55 backdrop-blur active:scale-95"><RotateCcw className="w-4 h-4"/></button></div><div className="flex items-center gap-2 px-3 py-2 text-xs font-medium" style={{color:"var(--muted)"}}><Camera className="w-3.5 h-3.5"/> Gemini is seeing your camera</div></div>
         <div className="relative flex items-center justify-center orb-reactive" style={{ "--orb-energy": orbEnergy } as CSSProperties}>
           {orbStyle !== "particle" && (status === "listening" || status === "speaking") && [0,1,2].map(i => <div key={i} className="absolute w-[min(290px,78vw)] h-[min(290px,78vw)] rounded-full border pointer-events-none" style={{borderColor:status==="speaking"?"rgba(16,163,127,.22)":"rgba(100,140,255,.25)",animation:`pulseRing ${status==="speaking"?"1.25":"1.8"}s ease-out ${i*.3}s infinite`}}/>) }
