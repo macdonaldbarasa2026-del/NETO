@@ -1,4 +1,4 @@
-const CACHE = "neto-v5";
+const CACHE = "neto-v6";
 const OFFLINE_HTML = "/";
 
 // This list is augmented automatically after Vite builds by
