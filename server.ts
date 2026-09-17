@@ -701,6 +701,8 @@ async function startServer() {
         },
       });
 
+      if (clientWs.readyState === 1) clientWs.send(JSON.stringify({ ready: true }));
+
       clientWs.on("message", (data) => {
         try {
           const { audio, video, text } = JSON.parse(data.toString());

@@ -264,6 +264,7 @@ export default function App() {
   const ambientRef = useRef<AudioContext | null>(null);
   const ambientGainRef = useRef<GainNode | null>(null);
   const liveSessionRef = useRef<any>(null);
+  const liveReadyRef = useRef(false);
   const micStreamRef = useRef<MediaStream | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -550,6 +551,7 @@ export default function App() {
   const disconnectLive = useCallback(() => {
     keepListeningRef.current = false;
     intentionalStopRef.current = true;
+    liveReadyRef.current = false;
     try { liveSessionRef.current?.close(); } catch {}
     liveSessionRef.current = null;
     try { micProcessorRef.current?.disconnect(); } catch {}
@@ -573,6 +575,7 @@ export default function App() {
     if (isMicMuted || (!withVideo && !voiceMode) || liveSessionRef.current) return;
     keepListeningRef.current = true;
     intentionalStopRef.current = false;
+    liveReadyRef.current = false;
     liveOutputTextRef.current = "";
     try {
       if (!window.isSecureContext) throw new Error("Voice requires a secure HTTPS connection.");
@@ -624,7 +627,7 @@ export default function App() {
       silentGain.connect(ctx.destination);
 
       processor.onaudioprocess = (event) => {
-        if (!liveSessionRef.current || isMicMuted || liveSessionRef.current.readyState !== WebSocket.OPEN) return;
+        if (!liveReadyRef.current || !liveSessionRef.current || isMicMuted || liveSessionRef.current.readyState !== WebSocket.OPEN) return;
         const input = event.inputBuffer.getChannelData(0);
         const ratio = ctx.sampleRate / 16000;
         const length = Math.floor(input.length / ratio);
@@ -642,6 +645,11 @@ export default function App() {
 
       ws.onopen = () => {
         setLiveConnected(true);
+        setStatus("thinking");
+      };
+
+      const markLiveReady = () => {
+        liveReadyRef.current = true;
         setStatus("listening");
         isListeningRef.current = true;
         if (withVideo) {
@@ -660,6 +668,7 @@ export default function App() {
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
+          if (msg.ready) { markLiveReady(); return; }
           if (msg.audio) playLivePcm(msg.audio);
           if (msg.error) { setTranscript(msg.error); disconnectLive(); setStatus("idle"); return; }
           if (msg.listening) setStatus("listening");
@@ -708,6 +717,7 @@ export default function App() {
       ws.onclose = () => {
         const shouldReconnect = !withVideo && !intentionalStopRef.current && keepListeningRef.current && !isMicMuted && voiceMode;
         setLiveConnected(false);
+        liveReadyRef.current = false;
         isListeningRef.current = false;
         liveSessionRef.current = null;
         try { micProcessorRef.current?.disconnect(); } catch {}
