@@ -122,7 +122,8 @@ export default function App() {
   const [speed, setSpeed] = useState(1);
   const [language, setLanguage] = useState(() => localStorage.getItem("voice-orb-lang") || "en-US");
   const [ambientSounds, setAmbientSounds] = useState(false);
-  const [voiceMode, setVoiceMode] = useState(true);
+  // Use the platform/browser recognizer by default; Live Voice remains opt-in.
+  const [voiceMode, setVoiceMode] = useState(false);
   const [aiMode, setAiMode] = useState<"normal" | "pro">(() => (localStorage.getItem("neto-ai-mode") as "normal" | "pro") || "normal");
   const [liveConnected, setLiveConnected] = useState(false);
   const [videoConversationActive, setVideoConversationActive] = useState(false);
@@ -704,7 +705,15 @@ export default function App() {
       };
 
       ws.onerror = () => {
-        if (!intentionalStopRef.current) setTranscript("Voice connection failed. Please try again.");
+        if (!intentionalStopRef.current) {
+          // Stop retrying a broken live session; the next tap uses standard voice.
+          intentionalStopRef.current = true;
+          keepListeningRef.current = false;
+          if (!withVideo) setVoiceMode(false);
+          setTranscript("Live voice is unavailable. Tap the orb again to use standard voice.");
+          disconnectLive();
+          setStatus("idle");
+        }
       };
       ws.onclose = () => {
         const shouldReconnect = !withVideo && !intentionalStopRef.current && keepListeningRef.current && !isMicMuted && voiceMode;
