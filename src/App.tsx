@@ -6,6 +6,9 @@ import { useState, useEffect, useRef, useCallback, useMemo, type CSSProperties, 
 import { Menu, Settings, Plus, Clock, Mic, MicOff, Camera, Video, X, Send, Volume2, VolumeX, Download, UserRound, ArrowLeft, ImagePlus, Trash2, Search, Smartphone, ExternalLink, Copy, RotateCcw, Square, WifiOff } from "lucide-react";
 import { uploadAttachment, signInWithGoogle, signInWithNativeGoogleToken, logout, onAuthChange, saveConversation, loadRecentConversations, clearAllConversations } from "./lib/firebase";
 import { executeAndroidCommand, getAndroidCapabilities, isAndroidAction, parseAndroidCommand, type AndroidAction, type AndroidCommand, type AndroidCapabilities } from "./lib/androidControl";
+import { detectUserIntent, buildQuickIntentActions } from "./lib/intent";
+import { getAdaptiveProfile, buildAdaptiveSuggestions } from "./lib/adaptiveProfile";
+import { shouldUseWebSearch } from "./lib/webSearch";
 
 declare global {
   interface Window {
@@ -143,9 +146,16 @@ export default function App() {
   const [historySearchQuery, setHistorySearchQuery] = useState("");
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [hasStarted, setHasStarted] = useState(false);
+  const [intentHint, setIntentHint] = useState("");
+  const [selectedIntent, setSelectedIntent] = useState<string | null>(null);
+  const [adaptiveMode, setAdaptiveMode] = useState("default");
+  const [adaptivePace, setAdaptivePace] = useState<"fast" | "balanced" | "calm">("balanced");
+  const [adaptiveSuggestions, setAdaptiveSuggestions] = useState<string[]>([]);
+  const [compactMode, setCompactMode] = useState(false);
   const [connectors, setConnectors] = useState<{ id: string; name: string; connected: boolean; requiresConsent: boolean; scopes: string[]; privacy: string; status: string }[]>([]);
   const [connectorMessage, setConnectorMessage] = useState("");
   const [connectorBusy, setConnectorBusy] = useState(false);
+  const quickIntentOptions = useMemo(() => buildQuickIntentActions(), []);
 
   const fetchConnectors = useCallback(async () => {
     try {
@@ -317,6 +327,27 @@ export default function App() {
       setCaptionLines(next);
     }
   }, []);
+
+  useEffect(() => {
+    const width = window.innerWidth;
+    const isPhone = width < 430 || /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
+    const profile = getAdaptiveProfile(chatHistory, { isPhone, width, isOffline: !navigator.onLine });
+    setAdaptiveMode(profile.mode);
+    setAdaptivePace(profile.pace);
+    setAdaptiveSuggestions(buildAdaptiveSuggestions(chatHistory));
+    setCompactMode(profile.compactUI);
+  }, [chatHistory]);
+
+  useEffect(() => {
+    if (!draftText.trim()) {
+      setIntentHint("");
+      setSelectedIntent(null);
+      return;
+    }
+    const detected = detectUserIntent(draftText);
+    setSelectedIntent(detected.actionLabel);
+    setIntentHint(detected.suggestion);
+  }, [draftText]);
 
   useEffect(() => {
     const refresh = () => setAndroidCapabilities(getAndroidCapabilities());
@@ -1133,8 +1164,16 @@ export default function App() {
     const text = draftText.trim();
     if (text || imageAttachment) {
       const attachment = imageAttachment;
+      const intent = detectUserIntent(text || "");
       setDraftText("");
       setImageAttachment(null);
+      setIntentHint(intent.suggestion);
+      if (shouldUseWebSearch(text)) {
+        setTranscript("Checking the latest web sources…");
+      }
+      if (intent.category === "device" && !text.toLowerCase().includes("call") && !text.toLowerCase().includes("text")) {
+        setNativeActionStatus("Intent detected: phone workflow ready. I’m preparing the right device action.");
+      }
       void handleMessage(text || (attachment?.mimeType.startsWith("image/") ? "Please analyze this image." : `Please analyze this file: ${attachment?.name || "attachment"}.`), attachment);
     }
   }, [draftText, imageAttachment, handleMessage]);
@@ -1197,6 +1236,23 @@ export default function App() {
       `}</style>
 
       <div className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between px-4 sm:px-8 pt-[max(16px,env(safe-area-inset-top))] pb-4 select-none pointer-events-auto">
+        {adaptiveSuggestions.length > 0 && (
+          <div className="absolute left-1/2 top-[72px] -translate-x-1/2 w-[min(560px,calc(100%-32px))] z-40">
+            <div className="flex flex-wrap justify-center gap-2">
+              {adaptiveSuggestions.map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => setDraftText(item)}
+                  className="rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em]"
+                  style={{ background: "var(--surface)", borderColor: "var(--border)", color: "var(--text)" }}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <button aria-label="Open menu" onClick={() => openPanel(setMenuOpen)} className="w-11 h-11 sm:w-12 sm:h-12 rounded-full flex items-center justify-center shadow-sm border active:scale-95 transition-transform" style={{ background:"var(--surface-solid)", borderColor:"var(--border)" }}><Menu className="w-5 h-5" /></button>
         <div className="flex items-center gap-2 sm:gap-3">
           <button aria-label={isMuted ? "Unmute AI voice" : "Mute AI voice"} onClick={() => { setIsMuted(v => !v); if (!isMuted) window.speechSynthesis?.cancel(); }} className="w-11 h-11 sm:w-12 sm:h-12 rounded-full shadow-sm flex items-center justify-center border active:scale-95 transition-transform" style={{ background:isMuted?"rgba(239,68,68,.12)":"var(--surface-solid)", borderColor:"var(--border)" }}>{isMuted?<VolumeX className="w-5 h-5 text-red-500"/>:<Volume2 className="w-5 h-5"/>}</button>
@@ -1217,6 +1273,10 @@ export default function App() {
           <p className="neto-kicker">PRIVATE VOICE WORKSPACE</p>
           <h1>What can we work through?</h1>
           <p className="neto-subtitle">Speak naturally or type below. Neto is ready when you are.</p>
+          <div className="mt-4 flex items-center justify-center gap-2 text-[10px] uppercase tracking-[0.12em]">
+            <span className="rounded-full border px-2 py-1" style={{ borderColor: "var(--border)", color: "var(--muted)" }}>Adaptive mode: {adaptiveMode}</span>
+            <span className="rounded-full border px-2 py-1" style={{ borderColor: "var(--border)", color: "var(--muted)" }}>Pace: {adaptivePace}</span>
+          </div>
         </div>}
         <div className="h-7 mt-5 mb-2 flex items-center justify-center">{statusText ? <span className="neto-status-pill"><span className="neto-status-dot" />{statusText}</span> : <span className="neto-ready"><span className="neto-status-dot" />Ready</span>}</div>
         <div className={videoConversationActive ? "mb-4 w-[min(360px,82vw)] overflow-hidden rounded-2xl border shadow-lg" : "hidden"} style={{borderColor:"var(--border)",background:"var(--surface-solid)"}}><div className="relative"><video ref={cameraVideoRef} muted playsInline className={`block w-full aspect-video object-cover ${cameraFacing === "user" ? "-scale-x-100" : ""}`}/><button aria-label="Switch front or back camera" onClick={switchCamera} className="absolute right-2 top-2 w-9 h-9 rounded-full flex items-center justify-center text-white bg-black/55 backdrop-blur active:scale-95"><RotateCcw className="w-4 h-4"/></button></div><div className="flex items-center gap-2 px-3 py-2 text-xs font-medium" style={{color:"var(--muted)"}}><Camera className="w-3.5 h-3.5"/> Gemini is seeing your camera</div></div>
@@ -1258,7 +1318,7 @@ export default function App() {
       </div>
 
       <div className="absolute bottom-0 left-0 right-0 z-20 px-3 sm:px-6 pb-[max(12px,env(safe-area-inset-bottom))] pt-2" style={{background:"linear-gradient(to top,var(--bg) 60%,transparent)"}}>
-        <div className="mx-auto max-w-[560px] flex items-center gap-2 sm:gap-2.5">
+        <div className={`mx-auto max-w-[560px] flex items-center gap-2 sm:gap-2.5 ${compactMode ? "scale-[0.98]" : ""}`}>
           <div className="flex-1 h-12 sm:h-[52px] rounded-full shadow-sm border flex items-center pl-1.5 sm:pl-2 pr-2.5 sm:pr-3 gap-2" style={{background:"var(--surface-solid)",borderColor:"var(--border)"}}>
             <button aria-label="Attach image or file" disabled={uploadingFile} onClick={()=>{
               const input=document.createElement("input");
@@ -1297,6 +1357,11 @@ export default function App() {
               input.click();
             }} className="w-9 h-9 rounded-full flex items-center justify-center transition shrink-0 disabled:opacity-50 active:scale-95" style={{background:"var(--accent-soft)"}}>{imageAttachment?<ImagePlus className="w-4 h-4 sm:w-5 sm:h-5"/>:<Plus className="w-4 h-4 sm:w-5 sm:h-5"/>}</button>
             <div className="flex-1 min-w-0 relative">
+              {intentHint && (
+                <div className="absolute z-30 bottom-[52px] left-0 right-0 rounded-2xl border px-3 py-2 text-[11px] shadow-lg" style={{background:"var(--surface-solid)",borderColor:"var(--border)",color:"var(--muted)"}}>
+                  <span className="font-semibold" style={{color:"var(--text)"}}>{selectedIntent || "Intent"}: </span>{intentHint}
+                </div>
+              )}
               {(imageAttachment || uploadingFileName) && (
                 <div className="absolute z-30 bottom-[52px] left-0 flex items-center gap-2 rounded-2xl border p-2 shadow-lg max-w-[min(300px,82vw)]" style={{background:"var(--surface-solid)",borderColor:"var(--border)"}}>
                   {imageAttachment?.mimeType.startsWith("image/") ? <img src={imageAttachment.url} alt={imageAttachment.name} className="w-11 h-11 rounded-xl object-cover"/> : <div className="w-11 h-11 rounded-xl flex items-center justify-center text-[10px] font-bold" style={{background:"var(--accent-soft)",color:"var(--accent)"}}>{uploadingFile ? "UP…" : "FILE"}</div>}
@@ -1304,6 +1369,24 @@ export default function App() {
                   {!uploadingFile && <button aria-label="Remove attachment" onClick={()=>setImageAttachment(null)} className="w-7 h-7 rounded-full flex items-center justify-center shrink-0" style={{background:"var(--accent-soft)"}}><X className="w-3.5 h-3.5"/></button>}
                 </div>
               )}
+              <div className="flex flex-wrap gap-1.5 pb-2 pt-1">
+                {quickIntentOptions.map((option) => (
+                  <button
+                    key={option.label}
+                    type="button"
+                    onClick={() => {
+                      setHasStarted(true);
+                      setDraftText(option.value);
+                      setSelectedIntent(option.label);
+                      setIntentHint(option.description);
+                    }}
+                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.08em]"
+                    style={{ background: "var(--surface)", borderColor: "var(--border)", color: "var(--text)" }}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
               <input aria-label="Message" maxLength={12000} value={draftText} onChange={e=>{setHasStarted(true);setDraftText(e.target.value)}} onKeyDown={e=>{if(e.key==="Enter" && !e.shiftKey)submitText()}} placeholder={uploadingFile?`Uploading… ${uploadProgress}%`:status==="listening"?"Listening…":"Type a message…"} className="w-full bg-transparent outline-none text-base sm:text-[15px]" style={{color:"var(--text)"}} />
               {uploadingFile && <div className="absolute left-0 right-0 -bottom-1 h-1 overflow-hidden rounded-full" style={{background:"var(--accent-soft)"}}><div className="h-full transition-all" style={{width:`${uploadProgress}%`,background:"var(--accent)"}} /></div>}
               {draftText.trim() && !uploadingFile && (

@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import { createServer as createViteServer } from "vite";
 import { initializeApp, getApps, cert } from "firebase-admin/app";
 import { GoogleGenAI } from "@google/genai";
+import { shouldUseWebSearch, summarizeSearchResults } from "./src/lib/webSearch";
 
 let ai: GoogleGenAI | null = null;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
@@ -35,6 +36,50 @@ if (serviceAccountKey) {
   }
 } else {
   console.warn("FIREBASE_SERVICE_ACCOUNT_KEY not found. Firebase Admin is not initialized.");
+}
+
+async function fetchWebSearchContext(query: string): Promise<string> {
+  const url = new URL("https://api.duckduckgo.com/");
+  url.search = new URLSearchParams({
+    q: query,
+    format: "json",
+    no_redirect: "1",
+    no_html: "1",
+    skip_disambig: "1",
+  }).toString();
+
+  const response = await fetch(url.toString(), {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (compatible; NetoSearch/1.0)",
+      Accept: "application/json",
+    },
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Web search failed with status ${response.status}`);
+  }
+
+  const payload: any = await response.json();
+  const results = [] as Array<{ title: string; href: string; snippet: string }>;
+
+  if (payload?.RelatedTopics) {
+    for (const topic of Array.isArray(payload.RelatedTopics) ? payload.RelatedTopics : []) {
+      const entry = topic?.Result || topic?.Text || topic?.Name;
+      if (!entry) continue;
+      const name = topic?.Text?.split(" - ")?.[0] || topic?.Name || "Related result";
+      const href = topic?.FirstURL || "https://duckduckgo.com/";
+      const snippet = typeof entry === "string" ? entry : "Web result";
+      results.push({ title: String(name).slice(0, 150), href, snippet: String(snippet).slice(0, 240) });
+    }
+  }
+
+  return summarizeSearchResults({
+    abstract: typeof payload?.AbstractText === "string" ? payload.AbstractText : "Latest web search results were checked for this query.",
+    results,
+    source: payload?.AbstractSource || "DuckDuckGo",
+    timestamp: new Date().toISOString(),
+  });
 }
 
 async function startServer() {
@@ -91,7 +136,7 @@ async function startServer() {
 
   const wss = new WebSocketServer({ server: httpServer, path: "/live" });
 
-  const NETO_VOICE_INSTRUCTIONS = `You are Neto, the AI assistant inside the Neto app. You were created for Neto by Macdonald Barasa. Your product/company identity is Neto. Do not expose the underlying AI provider unless the user explicitly asks about the technical stack. Give brief, immediate conversational replies, normally 1-2 short sentences unless the user asks for detail. Never use markdown in voice replies. Be natural, clear, friendly, and fast.`;
+  const NETO_VOICE_INSTRUCTIONS = `You are Neto, a senior technology professor and product mentor inside the Neto app. You were created for Neto by Macdonald Barasa. Your product/company identity is Neto. Think like a highly experienced engineering professor: precise, clear, structured, and deeply practical. Explain technical ideas with confidence, stay mobile-first, favour direct device actions when the user is on a phone, and never expose the underlying AI provider unless the user explicitly asks about the technical stack. Give brief, immediate conversational replies, normally 1-2 short sentences unless the user asks for detail. Never use markdown in voice replies. Be natural, clear, friendly, and fast.`;
 
   const appEncryptionKey = process.env.APP_ENCRYPTION_KEY ? crypto.createHash("sha256").update(process.env.APP_ENCRYPTION_KEY).digest() : null;
 
@@ -701,12 +746,21 @@ async function startServer() {
         mode,
       };
 
+      let webSearchContext = "";
+      if (shouldUseWebSearch(message)) {
+        try {
+          webSearchContext = await fetchWebSearchContext(message);
+        } catch (error) {
+          console.warn("Web search context failed:", error);
+        }
+      }
+
       if (mode === "pro") {
         if (!process.env.OPENAI_API_KEY) return res.status(503).json({ error: "Pro is not configured yet." });
         const openAiMessages: any[] = [
           {
             role: "developer",
-            content: `You are Neto, the AI assistant inside the Neto app. The product identity is Neto and the verified creator is Macdonald Barasa. Do not expose the underlying AI provider unless the user explicitly asks about the technical stack. Be concise by default, direct, natural, and helpful. Do not claim to execute device actions; the user must explicitly initiate and confirm them in the Device screen. Client context: ${JSON.stringify(safeClientContext)}`
+            content: `You are Neto, the AI assistant inside the Neto app. You are operating as a senior technology professor and mentor with deep practical engineering knowledge. The product identity is Neto and the verified creator is Macdonald Barasa. Do not expose the underlying AI provider unless the user explicitly asks about the technical stack. Be concise by default, direct, natural, and helpful. Prefer practical, phone-first guidance, and when a user asks for phone or device actions, favor safe Android workflows and clear confirmations. If the user asks for real-time or current information, treat the web-search context as the current source-of-truth and say that you checked the latest available web results. Do not claim to execute device actions; the user must explicitly initiate and confirm them in the Device screen. Client context: ${JSON.stringify(safeClientContext)}`
           },
           ...safeHistory.map((item) => ({
             role: item.role === "model" ? "assistant" : "user",
@@ -715,7 +769,7 @@ async function startServer() {
         ];
 
         const userText = isToolResult ? toolResultText : message || (safeAttachment?.mimeType.startsWith("image/") ? "Please analyze the attached image." : "Please analyze the attached file.");
-        const userContent: any[] = [{ type: "text", text: userText }];
+        const userContent: any[] = [{ type: "text", text: webSearchContext ? `${userText}\n\nWeb search context checked on the live web:\n${webSearchContext}` : userText }];
         if (safeAttachment?.text) userContent.push({ type: "text", text: `Attached file ${safeAttachment.name} contains:\n${safeAttachment.text}` });
 
         if (safeAttachment?.url && safeAttachment?.mimeType) {
@@ -825,7 +879,7 @@ async function startServer() {
       }
 
       if (!ai) return res.status(503).json({ error: "Normal service is not configured" });
-      const userParts: any[] = [{ text: isToolResult ? toolResultText : message || (safeAttachment?.mimeType.startsWith("image/") ? "Please analyze the attached image." : "Please analyze the attached file.") }];
+      const userParts: any[] = [{ text: webSearchContext ? `${isToolResult ? toolResultText : message || (safeAttachment?.mimeType.startsWith("image/") ? "Please analyze the attached image." : "Please analyze the attached file.")}\n\nWeb search context checked on the live web:\n${webSearchContext}` : (isToolResult ? toolResultText : message || (safeAttachment?.mimeType.startsWith("image/") ? "Please analyze the attached image." : "Please analyze the attached file.")) }];
 
       if (safeAttachment?.text) {
         userParts.push({ text: `Attached file ${safeAttachment.name} contains:\n${safeAttachment.text}` });
@@ -901,6 +955,7 @@ Conversation rules:
 - Answer text messages normally and directly. Never require voice input for a text question.
 - Keep replies concise by default, but give detail when requested.
 - In voice mode, avoid markdown; in text mode, normal formatting is allowed.
+- When the user asks for live or current information, use the web-search context as the latest available fact source and say you checked the web when relevant.
 Installation awareness:
 - Neto is a Progressive Web App (PWA).
 - If installed is false and the user asks to install, explain that the app's Install button or browser Add to Home Screen/Install option should be used.
