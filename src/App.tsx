@@ -769,6 +769,13 @@ export default function App() {
     } catch { setTranscript("Could not switch camera. Check camera permissions and try again."); }
   }, [cameraFacing, videoConversationActive]);
 
+  useEffect(() => {
+    if (!videoConversationActive || !cameraVideoRef.current || !micStreamRef.current) return;
+    const video = cameraVideoRef.current;
+    video.srcObject = micStreamRef.current;
+    void video.play().catch(() => setTranscript("Camera preview could not start. Check browser camera permissions."));
+  }, [videoConversationActive]);
+
   const startVideoConversation = useCallback(() => {
     if (aiMode !== "normal") { setTranscript("Video Conversation uses Gemini Live. Switch AI mode to Normal first."); return; }
     conversationActiveRef.current = true; void startLiveVoice(true);
@@ -1355,6 +1362,7 @@ export default function App() {
               )}
             </div>
           </div>
+
           <button aria-label={videoConversationActive ? "End Video Conversation" : "Start Video Conversation"} onClick={()=>{ if(videoConversationActive){ stopEverything(); } else { stopEverything(); startVideoConversation(); } }} className="w-12 h-12 sm:w-[52px] sm:h-[52px] rounded-full flex items-center justify-center shadow-sm border shrink-0 active:scale-95 transition-transform" style={{background:videoConversationActive?"rgba(239,68,68,.12)":"var(--surface-solid)",borderColor:"var(--border)",color:videoConversationActive?"#ef4444":"var(--text)"}}>{videoConversationActive?<Video className="w-5 h-5"/>:<Camera className="w-5 h-5"/>}</button>
           <button aria-label={isMicMuted?"Unmute microphone":"Mute microphone"} onClick={toggleMic} className="w-12 h-12 sm:w-[52px] sm:h-[52px] rounded-full flex items-center justify-center shadow-sm border shrink-0 active:scale-95 transition-transform" style={{background:isMicMuted?"rgba(239,68,68,.12)":"var(--surface-solid)",borderColor:"var(--border)",color:isMicMuted?"#ef4444":"var(--text)"}}>{isMicMuted?<MicOff className="w-5 h-5"/>:<Mic className="w-5 h-5"/>}</button>
           <button aria-label="End conversation" onClick={()=>setEndConfirmOpen(true)} className="w-12 h-12 sm:w-[52px] sm:h-[52px] rounded-full text-white flex items-center justify-center shadow-md shrink-0 active:scale-95 transition-transform" style={{background:"var(--text)"}}><X className="w-5 h-5"/></button>
