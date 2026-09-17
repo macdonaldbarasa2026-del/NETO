@@ -264,6 +264,7 @@ export default function App() {
   const speakingRef = useRef(false);
   const ambientRef = useRef<AudioContext | null>(null);
   const ambientGainRef = useRef<GainNode | null>(null);
+  const micCueActiveRef = useRef(false);
   const liveSessionRef = useRef<any>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
@@ -491,17 +492,23 @@ export default function App() {
     setTimeout(() => { try { ambientRef.current?.close(); } catch {} ambientRef.current = null; ambientGainRef.current = null; }, 250);
   }, []);
 
-  const startAmbient = useCallback(() => {
-    if (!ambientSounds || ambientRef.current) return;
+  const playMicCue = useCallback((enabled: boolean) => {
+    if (!ambientSounds) return;
     try {
       const ctx = new AudioContext({ latencyHint: "interactive" });
-      const osc = ctx.createOscillator();
+      const oscillator = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.type = "sine"; osc.frequency.value = 92; gain.gain.value = 0.018;
-      osc.connect(gain).connect(ctx.destination); osc.start();
-      ambientRef.current = ctx; ambientGainRef.current = gain;
+      oscillator.type = "sine"; oscillator.frequency.value = enabled ? 660 : 440;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.055, ctx.currentTime + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.12);
+      oscillator.connect(gain).connect(ctx.destination); oscillator.start(); oscillator.stop(ctx.currentTime + 0.14);
+      oscillator.onended = () => { void ctx.close().catch(() => {}); };
     } catch {}
   }, [ambientSounds]);
+
+  // Kept as a compatibility no-op for existing cleanup paths. Microphone feedback is now one-shot.
+  const startAmbient = useCallback(() => {}, []);
 
   const decodeBase64 = useCallback((base64: string) => {
     const binary = atob(base64); const bytes = new Uint8Array(binary.length);
@@ -578,7 +585,7 @@ export default function App() {
     playbackTimeRef.current = 0;
     micProcessorRef.current = null; micSourceRef.current = null; micAnalyserRef.current = null; micContextRef.current = null; micStreamRef.current = null; setOrbEnergy(0.12);
     setLiveConnected(false); setVideoConversationActive(false); isListeningRef.current = false; speakingRef.current = false; stopAmbient();
-  }, [stopAmbient]);
+  }, [playMicCue, stopAmbient]);
 
   const startLiveVoice = useCallback(async (withVideo = false) => {
     if (isMicMuted || (!withVideo && !voiceMode) || liveSessionRef.current) return;
@@ -594,6 +601,7 @@ export default function App() {
         ...(withVideo ? { video: { facingMode: cameraFacing, width: { ideal: 640, max: 960 }, height: { ideal: 360, max: 540 }, frameRate: { ideal: 1, max: 2 } } } : {}),
       });
       micStreamRef.current = stream;
+      if (!micCueActiveRef.current) { micCueActiveRef.current = true; playMicCue(true); }
       if (withVideo) {
         if (!stream.getVideoTracks()[0]) throw new Error("Camera access was not available.");
         cameraStreamRef.current = stream;
@@ -751,7 +759,7 @@ export default function App() {
       } else setTranscript(error?.name === "NotAllowedError" ? "Microphone access was denied. Enable it in browser or Android settings." : (error?.message || "Voice is unavailable right now."));
       setStatus("idle");
     }
-  }, [aiMode, cameraFacing, disconnectLive, finalizeLiveCaption, isMicMuted, language, playLivePcm, stopAmbient, updateLiveCaption, voiceMode]);
+  }, [aiMode, cameraFacing, disconnectLive, finalizeLiveCaption, isMicMuted, language, playLivePcm, playMicCue, stopAmbient, updateLiveCaption, voiceMode]);
 
 
   const switchCamera = useCallback(async () => {
@@ -1026,7 +1034,7 @@ export default function App() {
     if (window.NetoNative?.startVoice) {
       try {
         const result = JSON.parse(window.NetoNative.startVoice(language));
-        if (result?.ok) { transcriptRef.current = ""; setTranscript(""); setStatus("listening"); startAmbient(); return; }
+        if (result?.ok) { transcriptRef.current = ""; setTranscript(""); setStatus("listening"); if (!micCueActiveRef.current) { micCueActiveRef.current = true; playMicCue(true); } return; }
         conversationActiveRef.current = false;
         setTranscript(result?.message || "Voice is unavailable right now."); setStatus("idle"); return;
       } catch { conversationActiveRef.current = false; setTranscript("Android voice could not start."); setStatus("idle"); return; }
@@ -1044,7 +1052,7 @@ export default function App() {
     // continuous:true + auto-restart below keeps the mic "awake" through natural pauses,
     // instead of the browser closing the session after the first thing the user says.
     recognition.continuous = true; recognition.interimResults = true; recognition.maxAlternatives = 1; recognition.lang = language;
-    isListeningRef.current = true; transcriptRef.current = ""; setTranscript(""); setStatus("listening"); startAmbient();
+    isListeningRef.current = true; transcriptRef.current = ""; setTranscript(""); setStatus("listening"); if (!micCueActiveRef.current) { micCueActiveRef.current = true; playMicCue(true); }
     recognition.onstart = () => { isListeningRef.current = true; setStatus("listening"); };
     recognition.onresult = (event: any) => {
       let text = "";
@@ -1074,7 +1082,7 @@ export default function App() {
       }
     };
     try { recognition.start(); } catch { setStatus("idle"); }
-  }, [handleMessage, isMicMuted, startAmbient, stopAmbient, startLiveVoice, updateLiveCaption, voiceMode, language]);
+  }, [handleMessage, isMicMuted, playMicCue, startAmbient, stopAmbient, startLiveVoice, updateLiveCaption, voiceMode, language]);
 
   useEffect(() => {
     if (!conversationActiveRef.current || status !== "idle" || isMicMuted) return;
@@ -1545,7 +1553,7 @@ export default function App() {
             <section><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Voice</label><div className="mt-3 grid grid-cols-3 gap-2">{["Sky","Cove","Breeze"].map(v=><button key={v} onClick={()=>setVoice(v)} className="h-12 rounded-full border text-sm font-semibold" style={{background:voice===v?"var(--text)":"var(--surface)",color:voice===v?"var(--bg)":"var(--text)",borderColor:"var(--border)"}}>{v}</button>)}</div></section>
             <section><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Orb style</label><div className="mt-3 grid grid-cols-2 gap-2 p-1 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><button onClick={()=>{setOrbStyle("classic");localStorage.setItem("neto-orb-style","classic")}} className="h-11 rounded-full text-sm font-semibold" style={{background:orbStyle === "classic" ? "var(--text)" : "transparent",color:orbStyle === "classic" ? "var(--bg)" : "var(--text)"}}>Blue orb</button><button onClick={()=>{setOrbStyle("particle");localStorage.setItem("neto-orb-style","particle")}} className="h-11 rounded-full text-sm font-semibold" style={{background:orbStyle === "particle" ? "#e87928" : "transparent",color:orbStyle === "particle" ? "white" : "var(--text)"}}>Orange particle</button></div><p className="text-xs mt-2" style={{color:"var(--muted)"}}>Choose the orb that appears on the home screen.</p></section>
             <section><div className="flex items-center justify-between h-14 px-4 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><div><p className="text-sm font-semibold">Captions</p><p className="text-xs" style={{color:"var(--muted)"}}>Show your words and Neto replies below the orb</p></div><button aria-label="Toggle captions" onClick={()=>setCaptionsEnabled(v=>!v)} className="relative w-12 h-7 rounded-full" style={{background:captionsEnabled?"var(--accent)":"var(--border)"}}><span className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all" style={{left:captionsEnabled?25:3}}/></button></div></section><section><div className="flex items-center justify-between h-14 px-4 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><div><p className="text-sm font-semibold">Experimental Live Voice</p><p className="text-xs" style={{color:"var(--muted)"}}>Optional experimental real-time conversation</p></div><button aria-label="Toggle live voice" onClick={()=>{setVoiceMode(v=>!v); conversationActiveRef.current=false; if (voiceMode) { intentionalStopRef.current=true; keepListeningRef.current=false; disconnectLive(); }}} className="relative w-12 h-7 rounded-full" style={{background:voiceMode?"var(--accent)":"var(--border)"}}><span className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all" style={{left:voiceMode?25:3}}/></button></div></section><section><div className="flex items-center justify-between"><label className="text-xs font-semibold tracking-wide uppercase" style={{color:"var(--muted)"}}>Speed</label><span className="text-xs font-medium px-2.5 py-1 rounded-full" style={{background:"var(--accent-soft)"}}>{speed.toFixed(1)}×</span></div><input aria-label="Voice speed" className="mt-4 w-full" type="range" min="0.7" max="1.4" step="0.1" value={speed} onChange={e=>setSpeed(parseFloat(e.target.value))}/></section>
-            <div className="flex items-center justify-between h-14 px-4 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><div><p className="text-sm font-semibold">Background sounds</p><p className="text-xs" style={{color:"var(--muted)"}}>Soft ambient hum while listening</p></div><button aria-label="Toggle background sounds" onClick={()=>setAmbientSounds(v=>!v)} className="relative w-12 h-7 rounded-full" style={{background:ambientSounds?"var(--accent)":"var(--border)"}}><span className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all" style={{left:ambientSounds?25:3}}/></button></div>
+            <div className="flex items-center justify-between h-14 px-4 rounded-full border" style={{background:"var(--surface)",borderColor:"var(--border)"}}><div><p className="text-sm font-semibold">Microphone sound cues</p><p className="text-xs" style={{color:"var(--muted)"}}>Short sound when the microphone starts or stops</p></div><button aria-label="Toggle background sounds" onClick={()=>setAmbientSounds(v=>!v)} className="relative w-12 h-7 rounded-full" style={{background:ambientSounds?"var(--accent)":"var(--border)"}}><span className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all" style={{left:ambientSounds?25:3}}/></button></div>
             <button onClick={()=>openPanel(setInstallOpen)} className="w-full h-12 rounded-full text-sm font-semibold border" style={{background:"var(--accent-soft)",borderColor:"var(--accent)"}}>{isInstalled?"Neto is installed":"Install Neto"}</button>
           </div>
         </div>
