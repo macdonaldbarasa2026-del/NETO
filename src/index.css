@@ -209,6 +209,8 @@ input, select, textarea {
 .caption-human.is-live span:last-child { color:var(--muted); }
 .caption-ai.is-live span:last-child { color:var(--text); }
 .caption-line span:last-child { flex:1; min-width:0; overflow:visible; overflow-wrap:anywhere; white-space:pre-wrap; }
+.caption-style-toggle { position:absolute; top:7px; right:9px; z-index:1; width:24px; height:24px; border:1px solid var(--border); border-radius:999px; background:var(--surface-solid); color:var(--muted); font-family:Georgia, serif; font-size:13px; line-height:22px; pointer-events:auto; }
+.caption-style-toggle.italic { color:var(--accent); background:var(--accent-soft); }
 
 .readable-response {
   width: min(92vw, 560px);
