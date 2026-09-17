@@ -121,8 +121,8 @@ export default function App() {
   const [voice, setVoice] = useState("Sky");
   const [speed, setSpeed] = useState(1);
   const [language, setLanguage] = useState(() => localStorage.getItem("voice-orb-lang") || "en-US");
-  // Use the platform/browser recognizer by default; Live Voice remains opt-in.
-  const [voiceMode, setVoiceMode] = useState(false);
+  // Voice mode uses the server WebSocket and Gemini Live by default.
+  const [voiceMode, setVoiceMode] = useState(true);
   const [aiMode, setAiMode] = useState<"normal" | "pro">(() => (localStorage.getItem("neto-ai-mode") as "normal" | "pro") || "normal");
   const [liveConnected, setLiveConnected] = useState(false);
   const [videoConversationActive, setVideoConversationActive] = useState(false);
@@ -295,6 +295,15 @@ export default function App() {
     const last = current[current.length - 1];
     let next: CaptionLine[];
     if (last?.speaker === speaker && !last.final) {
+      if (last.text === clean) {
+        if (options.final && !last.final) {
+          next = [...current.slice(0, -1), { ...last, final: true }];
+          captionLinesRef.current = next;
+          setCaptionLines(next);
+        }
+        setTranscript(clean);
+        return;
+      }
       const value = options.replace ? clean : (last.text + " " + clean).replace(/\s+/g, " ").trim();
       next = [...current.slice(0, -1), { ...last, text: value, final: options.final }];
     } else {

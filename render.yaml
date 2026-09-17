@@ -11,6 +11,8 @@ services:
         sync: false
       - key: GEMINI_MODEL
         value: gemini-2.5-flash
+      - key: GEMINI_LIVE_MODEL
+        value: gemini-2.5-flash-native-audio-preview-12-2025
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_PRO_MODEL
