@@ -354,8 +354,8 @@ input, select, textarea {
   overflow-y: auto;
   overflow-x: hidden;
   text-align: left;
-  pointer-events: auto;
-  cursor: pointer;
+  pointer-events: none;
+  cursor: default;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -365,6 +365,7 @@ input, select, textarea {
   transition: top .45s ease, bottom .45s ease, padding .3s ease;
 }
 .caption-focus .caption-line {
+  pointer-events: auto;
   width: min(82%, 390px);
   margin: 5px 0;
   padding: 9px 11px;
