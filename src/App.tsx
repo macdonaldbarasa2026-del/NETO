@@ -10,19 +10,6 @@ import { detectUserIntent } from "./lib/intent";
 import { getAdaptiveProfile, buildAdaptiveSuggestions } from "./lib/adaptiveProfile";
 import { shouldUseWebSearch } from "./lib/webSearch";
 
-declare global {
-  interface Window {
-    NetoNative?: {
-      startVoice?: (language?: string) => string;
-      stopVoice?: () => void;
-      stopSpeaking?: () => void;
-      speak?: (text: string, speed?: number) => string;
-      signInWithGoogle?: () => string;
-      [key: string]: any;
-    };
-  }
-}
-
 type Status = "idle" | "listening" | "thinking" | "speaking";
 type Theme = "light" | "dark" | "midnight" | "warm" | "contrast";
 
@@ -891,6 +878,7 @@ export default function App() {
     if (!toolResults?.length) setChatHistory(prev => [...prev, { role: "user", parts: [{ text: attachment ? `${text || "Image attached"} [${attachment.name}]` : text }] }]);
 
     const controller = new AbortController(); requestAbortRef.current = controller;
+    const requestTimeout = window.setTimeout(() => controller.abort(), 45_000);
     const clientContext = {
       creator: CREATOR,
       app: "Neto",
@@ -1006,8 +994,11 @@ export default function App() {
           const errorMessage = error?.message || "NETO is having trouble connecting to the server.";
           setChatHistory(prev => [...prev, { role: "model", parts: [{ text: `[Error: ${errorMessage}]` }] }]);
         }
+      } else {
+        setTranscript("The request took too long. Please try again.");
       }
-    } finally { requestAbortRef.current = null; }
+      setStatus("idle");
+    } finally { window.clearTimeout(requestTimeout); requestAbortRef.current = null; }
   }, [aiMode, chatHistory, isInstalled, installPrompt, speakSentence, theme, updateLiveCaption, voiceMode]);
 
   useEffect(() => { nativeVoiceHandlerRef.current = (text: string) => { if (text.trim()) void handleMessage(text, null, true); }; }, [handleMessage]);
