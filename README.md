@@ -1,35 +1,120 @@
-# Neto PWA
+NETO
 
-## AI modes
+«AI-powered personal assistant with text, vision, and live voice capabilities.»
 
-Neto has two user-facing AI modes:
+📱 Download NETO
 
-- Normal: Gemini handles text, images/files, and live voice.
-- Pro: OpenAI handles text, images/files, and live voice when `OPENAI_API_KEY` is configured on Render.
+⬇️ Android APK
 
-The provider names are intentionally hidden from the Neto UI. Users only see Normal and Pro.
+"📲 DOWNLOAD NETO APK" (./NETO.apk)
 
-## Render environment variables
+Tap the link above to open/download the APK directly from this GitHub repository.
 
-Set these in Render:
+APK: "NETO.apk"
+Size: ~7.5 MB
 
-- `GEMINI_API_KEY`
-- `OPENAI_API_KEY`
-- `FIREBASE_SERVICE_ACCOUNT_KEY`
+«⚠️ This is currently a debug build for testing.»
 
-Optional defaults already declared in `render.yaml`:
+---
 
-- `OPENAI_PRO_MODEL=gpt-5.6`
-- `OPENAI_PRO_REALTIME_MODEL=gpt-realtime-2.1`
-- `OPENAI_PRO_VOICE=marin`
+✨ Features
 
-Never put a real API key in the frontend, ZIP, or Git repository.
+- 🤖 Normal AI mode
+- ⚡ Pro AI mode
+- 🖼️ Image and file support
+- 🎙️ Live voice interaction
+- 📱 Android APK
+- 🌐 Progressive Web App support
+- ⚙️ Settings
+- 📚 History
+- ℹ️ About
+- ↩️ Back navigation
 
-## Voice
+---
+
+🧠 AI Modes
+
+Normal
+
+Normal mode supports:
+
+- Text
+- Images and files
+- Live voice
+
+Pro
+
+Pro mode supports:
+
+- Text
+- Images and files
+- Live voice
+
+The AI provider names are hidden from the NETO user interface. Users see Normal and Pro.
+
+---
+
+🎙️ Voice
 
 Normal voice uses the Gemini Live API.
-Pro voice uses the OpenAI Realtime API through the server websocket proxy. The browser sends microphone PCM to `/live?mode=pro`; the server resamples 16 kHz browser audio to the 24 kHz format required by the OpenAI realtime session and forwards returned audio to the browser.
 
-## Navigation
+Pro voice uses the OpenAI Realtime API through the server WebSocket proxy.
 
-Settings, History, About, and Install panels include Back navigation and browser back handling.
+---
+
+🔐 Environment Variables
+
+For backend deployment, configure:
+
+GEMINI_API_KEY
+OPENAI_API_KEY
+FIREBASE_SERVICE_ACCOUNT_KEY
+
+Optional:
+
+OPENAI_PRO_MODEL=gpt-5.6
+OPENAI_PRO_REALTIME_MODEL=gpt-realtime-2.1
+OPENAI_PRO_VOICE=marin
+
+Security
+
+Never commit real API keys or service credentials to GitHub.
+
+---
+
+📦 Repository
+
+File| Description
+""NETO.apk"" (./NETO.apk)| Android APK
+""LICENSE"" (./LICENSE)| MIT License
+"README.md"| Project documentation
+
+---
+
+📜 License
+
+NETO is licensed under the MIT License.
+
+"📜 View MIT License" (./LICENSE)
+
+---
+
+⚠️ APK Installation
+
+1. Tap DOWNLOAD NETO APK above.
+2. Download "NETO.apk".
+3. Open the downloaded APK.
+4. If Android asks, allow installation from the source you used to download it.
+5. Install NETO.
+
+---
+
+🛠️ Development
+
+NETO is built as a web/PWA application with an Android application build.
+
+Never place API keys directly in frontend source code or commit them to this repository.
+
+---
+
+NETO — AI, voice, and productivity in one place.
