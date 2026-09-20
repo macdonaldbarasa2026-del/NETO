@@ -49,7 +49,7 @@ The complete license is included in this repository.
 
 ## 🧠 What NETO Is
 
-**NETO** is an AI-powered personal assistant designed to bring text, image/file processing, and live voice capabilities together in one application.
+**NETO** is an AI-powered/phone agent for personal assistant designed to bring text, image/file processing, and live voice capabilities together in one application.
 
 NETO provides two user-facing AI modes:
 
@@ -124,23 +124,5 @@ Pro voice uses the **OpenAI Realtime API** through the server WebSocket proxy.
 - `NETO.apk`
 - Internet connection for AI/backend features
 
-### 💻 Development
 
-You need:
 
-- Git
-- Node.js
-- npm
-- Configured NETO backend
-- Required API credentials
-
----
-
-## 🔐 Environment Variables
-
-Configure these variables on the backend/deployment platform:
-
-```text
-GEMINI_API_KEY
-OPENAI_API_KEY
-FIREBASE_SERVICE_ACCOUNT_KEY
