@@ -9,16 +9,28 @@
 
 ---
 
-## 📥 Download NETO
+## 🌐 Live NETO
 
-### 📱 Android APK
+### 🚀 [OPEN NETO](https://neto-fnp7.onrender.com)
 
-**[⬇️ DOWNLOAD NETO APK](./NETO.apk)**
+Use NETO directly in your browser without downloading anything.
+
+**Live App:** https://neto-fnp7.onrender.com  
+**Platform:** Web / PWA  
+**Status:** Online
+
+---
+
+## 📱 Download NETO
+
+### ⬇️ Android APK
+
+### [📲 DOWNLOAD NETO APK](./NETO.apk)
 
 Tap the link above to download the Android APK directly from this repository.
 
 **APK:** `NETO.apk`  
-**Current build:** Debug  
+**Build:** Debug  
 **Size:** ~7.5 MB
 
 > ⚠️ The current APK is a development/debug build intended for testing.
@@ -29,9 +41,9 @@ Tap the link above to download the Android APK directly from this repository.
 
 NETO is released under the **MIT License**.
 
-**[📄 View Full License](./LICENSE)**
+### [📄 VIEW FULL LICENSE](./LICENSE)
 
-The license file is included in this repository.
+The complete license is included in this repository.
 
 ---
 
@@ -84,20 +96,20 @@ The underlying AI provider names are intentionally hidden from the NETO interfac
 
 ### 🟢 Normal
 
-Normal mode provides:
+Normal mode supports:
 
 - Text
-- Images/files
+- Images and files
 - Live voice
 
 Normal voice uses the **Gemini Live API**.
 
 ### 🔵 Pro
 
-Pro mode provides:
+Pro mode supports:
 
 - Text
-- Images/files
+- Images and files
 - Live voice
 
 Pro voice uses the **OpenAI Realtime API** through the server WebSocket proxy.
@@ -106,20 +118,20 @@ Pro voice uses the **OpenAI Realtime API** through the server WebSocket proxy.
 
 ## 📋 Requirements
 
-### For Android
+### 📱 Android
 
 - Android device
 - `NETO.apk`
 - Internet connection for AI/backend features
 
-### For Development
+### 💻 Development
 
 You need:
 
 - Git
 - Node.js
 - npm
-- A configured NETO backend
+- Configured NETO backend
 - Required API credentials
 
 ---
