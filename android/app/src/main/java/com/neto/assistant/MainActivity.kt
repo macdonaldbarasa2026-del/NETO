@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.net.Uri
@@ -17,7 +18,13 @@ import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.webkit.*
+import android.view.Gravity
 import android.view.WindowManager
+import android.view.View
+import android.widget.Button
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -25,6 +32,9 @@ import org.json.JSONObject
 
 class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
   private lateinit var webView: WebView
+  private lateinit var errorView: View
+  private lateinit var errorMessage: TextView
+  private var loadTimeout: Runnable? = null
   private var fileChooser: ValueCallback<Array<Uri>>? = null
   private var nativeFilePicker = false
   private var recognizer: SpeechRecognizer? = null
@@ -71,10 +81,19 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
   @SuppressLint("SetJavaScriptEnabled") override fun onCreate(state: Bundle?) { super.onCreate(state)
     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     try {
-      webView = WebView(this); setContentView(webView)
+      val root = FrameLayout(this)
+      webView = WebView(this)
+      errorView = createErrorView()
+      root.addView(webView, FrameLayout.LayoutParams(-1, -1))
+      root.addView(errorView, FrameLayout.LayoutParams(-1, -1))
+      setContentView(root)
       webView.settings.apply { javaScriptEnabled=true; domStorageEnabled=true; mediaPlaybackRequiresUserGesture=false; allowFileAccess=false; allowContentAccess=true }
       webView.addJavascriptInterface(NetoBridge(this, webView), "NetoNative")
       webView.webViewClient=object: WebViewClient(){
+        override fun onPageStarted(view:WebView, url:String, favicon:android.graphics.Bitmap?) { errorView.visibility=View.GONE; armLoadTimeout() }
+        override fun onPageFinished(view:WebView, url:String) { cancelLoadTimeout(); errorView.visibility=View.GONE }
+        override fun onReceivedError(view:WebView, request:WebResourceRequest, error:WebResourceError) { if(request.isForMainFrame){ cancelLoadTimeout(); showLoadError() } }
+        override fun onReceivedHttpError(view:WebView, request:WebResourceRequest, error:WebResourceResponse) { if(request.isForMainFrame&&error.statusCode>=400){ cancelLoadTimeout(); showLoadError(false) } }
         override fun shouldOverrideUrlLoading(view:WebView, request:WebResourceRequest):Boolean { val uri=request.url; return if(uri.scheme.equals("http",true)||uri.scheme.equals("https",true)) false else external(uri) }
         @Suppress("DEPRECATION") override fun shouldOverrideUrlLoading(view:WebView, url:String):Boolean { val uri=Uri.parse(url); return if(uri.scheme.equals("http",true)||uri.scheme.equals("https",true)) false else external(uri) }
       }
@@ -86,12 +105,25 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
       webView.setDownloadListener { url,_,_,_,_-> external(Uri.parse(url)) }
       webView.loadUrl(BuildConfig.NETO_ORIGIN)
     } catch (_: Exception) {
-      setContentView(android.widget.TextView(this).apply { text="NETO could not initialize Android WebView. Update Android System WebView, then reopen NETO."; setPadding(48, 48, 48, 48) })
+      errorView=createErrorView()
+      setContentView(errorView)
+      showLoadError(false)
       return
     }
     requestMissingRuntimePermissions()
     try { tts=TextToSpeech(this,this) } catch (_: Exception) { tts=null; ttsReady=false; dispatch("tts", JSONObject().put("state","error").put("message","Android text-to-speech is unavailable.")) }
   }
+  private fun createErrorView(): View {
+    val container=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL;gravity=Gravity.CENTER;setPadding(48,48,48,48);setBackgroundColor(Color.WHITE) }
+    val title=TextView(this).apply { text="Oops, you’re offline";textSize=24f;setTextColor(Color.rgb(25,25,25));gravity=Gravity.CENTER }
+    errorMessage=TextView(this).apply { text="Check your internet connection and try again.";textSize=16f;setTextColor(Color.DKGRAY);gravity=Gravity.CENTER;setPadding(0,16,0,24) }
+    val retry=Button(this).apply { text="Retry";setOnClickListener { errorView.visibility=View.GONE;webView.reload() } }
+    val close=Button(this).apply { text="Close";setOnClickListener { finishAffinity() } }
+    container.addView(title,LinearLayout.LayoutParams(-1,-2));container.addView(errorMessage,LinearLayout.LayoutParams(-1,-2));container.addView(retry,LinearLayout.LayoutParams(-2,-2));container.addView(close,LinearLayout.LayoutParams(-2,-2));return container
+  }
+  private fun armLoadTimeout(){ cancelLoadTimeout();loadTimeout=Runnable{showLoadError()};webView.postDelayed(loadTimeout!!,20000) }
+  private fun cancelLoadTimeout(){loadTimeout?.let{webView.removeCallbacks(it)};loadTimeout=null}
+  private fun showLoadError(offline:Boolean=isInternetAvailable().not()){runOnUiThread{errorMessage.text=if(offline)"Check your internet connection and try again." else "NETO could not load this page. Please try again.";errorView.visibility=View.VISIBLE}}
   private fun requestMissingRuntimePermissions() { val prefs=getSharedPreferences("neto_permissions",MODE_PRIVATE);val missing=runtimePermissions.filter { !has(it)&&!prefs.getBoolean("requested_$it",false)&&!permanentlyDenied(it) };if(missing.isNotEmpty()){prefs.edit().apply{missing.forEach{putBoolean("requested_$it",true)}}.apply();permissions.launch(missing.toTypedArray())} }
   override fun onInit(status:Int) { ttsReady=status==TextToSpeech.SUCCESS; if(ttsReady) runCatching { tts?.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY).build());tts?.setOnUtteranceProgressListener(object:UtteranceProgressListener(){override fun onStart(id:String)=dispatch("tts",JSONObject().put("state","speaking"));override fun onDone(id:String){audioManager.abandonAudioFocus(focusChange);dispatch("tts",JSONObject().put("state","idle"))};@Deprecated("Deprecated in Java") override fun onError(id:String){audioManager.abandonAudioFocus(focusChange);dispatch("tts",JSONObject().put("state","error").put("message","Android text-to-speech failed."))}}) }.onFailure { ttsReady=false } }
   fun requestCapability(name:String):JSONObject { if(name=="accessibility"){openAccessibilitySettings();return NetoAndroidController.successResult("Enable NETO Accessibility Service, then return here.")}; val permission=when(name){"microphone"->Manifest.permission.RECORD_AUDIO;"camera"->Manifest.permission.CAMERA;"contacts"->Manifest.permission.READ_CONTACTS;"phone"->Manifest.permission.CALL_PHONE;"phone_state"->Manifest.permission.READ_PHONE_STATE;"location"->Manifest.permission.ACCESS_FINE_LOCATION;"notifications"->if(Build.VERSION.SDK_INT>=33)Manifest.permission.POST_NOTIFICATIONS else null;else->return NetoAndroidController.failureResult("That permission is not supported.")};if(permission==null||has(permission))return NetoAndroidController.successResult("$name is already enabled.");if(permanentlyDenied(permission))return NetoAndroidController.failureResult("$name is blocked in Android settings. Open NETO app settings to allow it.","permanently_denied");getSharedPreferences("neto_permissions", MODE_PRIVATE).edit().putBoolean("requested_"+permission, true).apply();permissions.launch(arrayOf(permission));return NetoAndroidController.successResult("Android is asking for $name permission.") }
@@ -112,5 +144,5 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
   private fun voiceError(e:Int)=when(e){SpeechRecognizer.ERROR_NETWORK,SpeechRecognizer.ERROR_NETWORK_TIMEOUT->"Speech recognition needs a network connection.";SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS->"Allow microphone access to use voice.";SpeechRecognizer.ERROR_NO_MATCH,SpeechRecognizer.ERROR_SPEECH_TIMEOUT->"I did not hear anything. Tap Talk to try again.";else->"Speech recognition failed. Please try again."}
   private fun trusted(uri:Uri):Boolean{val base=Uri.parse(BuildConfig.NETO_ORIGIN);return uri.scheme==base.scheme&&uri.host==base.host&&uri.port==base.port}
   private fun external(uri:Uri):Boolean { val intent=when(uri.scheme?.lowercase()){"tel"->Intent(if(has(Manifest.permission.CALL_PHONE))Intent.ACTION_CALL else Intent.ACTION_DIAL,uri);"sms","smsto","mmsto","mailto"->Intent(Intent.ACTION_SENDTO,uri);"intent"->runCatching{Intent.parseUri(uri.toString(),Intent.URI_INTENT_SCHEME)}.getOrNull();else->Intent(Intent.ACTION_VIEW,uri).addCategory(Intent.CATEGORY_BROWSABLE)} ?: return true;return try{startActivity(intent);true}catch(_:ActivityNotFoundException){true}catch(_:Exception){true} }
-  override fun onResume(){super.onResume();if(::webView.isInitialized){runCatching { webView.onResume(); dispatch("capabilities",NetoAndroidController(this).capabilities()) } } };override fun onPause(){runCatching { stopVoice();stopSpeaking();if(::webView.isInitialized)webView.onPause() };super.onPause()};override fun onDestroy(){runCatching { pendingWebPermissionRequest?.deny();pendingGeoCallback?.invoke(pendingGeoOrigin.orEmpty(),false,false);fileChooser?.onReceiveValue(null);stopVoice();tts?.shutdown();if(::webView.isInitialized)webView.destroy() };window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);super.onDestroy()};@Deprecated("Deprecated in Java") override fun onBackPressed(){if(::webView.isInitialized&&webView.canGoBack())webView.goBack() else super.onBackPressed()}
+  override fun onResume(){super.onResume();if(::webView.isInitialized){runCatching { webView.onResume(); dispatch("capabilities",NetoAndroidController(this).capabilities()) } } };override fun onPause(){runCatching { stopVoice();stopSpeaking();if(::webView.isInitialized)webView.onPause() };super.onPause()};override fun onDestroy(){runCatching { cancelLoadTimeout();pendingWebPermissionRequest?.deny();pendingGeoCallback?.invoke(pendingGeoOrigin.orEmpty(),false,false);fileChooser?.onReceiveValue(null);stopVoice();tts?.shutdown();if(::webView.isInitialized)webView.destroy() };window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);super.onDestroy()};@Deprecated("Deprecated in Java") override fun onBackPressed(){if(::webView.isInitialized&&webView.canGoBack())webView.goBack() else super.onBackPressed()}
 }
