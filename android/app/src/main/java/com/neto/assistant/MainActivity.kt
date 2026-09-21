@@ -37,6 +37,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
   private lateinit var errorTitle: TextView
   private lateinit var errorMessage: TextView
   private var loadTimeout: Runnable? = null
+  private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
   private var fileChooser: ValueCallback<Array<Uri>>? = null
   private var nativeFilePicker = false
   private var recognizer: SpeechRecognizer? = null
@@ -106,6 +107,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
       }
       webView.setDownloadListener { url,_,_,_,_-> external(Uri.parse(url)) }
       webView.loadUrl(BuildConfig.NETO_ORIGIN)
+      registerNetworkMonitoring()
     } catch (_: Exception) {
       errorView=createErrorView()
       setContentView(errorView)
@@ -118,7 +120,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
   private fun createErrorView(): View {
     val blue=Color.rgb(25,103,210)
     val container=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL;gravity=Gravity.CENTER;setPadding(48,48,48,48);setBackgroundColor(Color.WHITE) }
-    errorTitle=TextView(this).apply { text="NETO is offline";textSize=25f;setTypeface(typeface, android.graphics.Typeface.BOLD);setTextColor(Color.rgb(20,32,55));gravity=Gravity.CENTER }
+    errorTitle=TextView(this).apply { text="Oops — NETO is offline";textSize=25f;setTypeface(typeface, android.graphics.Typeface.BOLD);setTextColor(Color.rgb(20,32,55));gravity=Gravity.CENTER }
     errorMessage=TextView(this).apply { text="NETO is ready to work when your connection returns. Check Wi‑Fi or mobile data, then try again.";textSize=16f;setTextColor(Color.rgb(75,85,99));gravity=Gravity.CENTER;setPadding(0,16,0,28) }
     val retry=Button(this).apply { text="Try again";setTextColor(Color.WHITE);isAllCaps=false;setTextSize(15f);background=roundedButton(blue,0);setPadding(28,0,28,0);setOnClickListener { errorView.visibility=View.GONE;webView.reload() } }
     val network=Button(this).apply { text="Open network settings";setTextColor(blue);isAllCaps=false;setTextSize(15f);background=roundedButton(Color.TRANSPARENT,blue);setPadding(22,0,22,0);setOnClickListener { openNetworkSettings() } }
@@ -128,9 +130,24 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     container.addView(errorTitle,LinearLayout.LayoutParams(-1,-2));container.addView(errorMessage,LinearLayout.LayoutParams(-1,-2));container.addView(buttons,LinearLayout.LayoutParams(-1,-2));return container
   }
   private fun roundedButton(fill:Int,stroke:Int):GradientDrawable=GradientDrawable().apply{cornerRadius=28f;setColor(fill);if(stroke!=0)setStroke(2,stroke)}
+  private fun registerNetworkMonitoring(){
+    val manager=getSystemService(CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+    val callback=object:android.net.ConnectivityManager.NetworkCallback(){
+      override fun onLost(network:android.net.Network){if(!isInternetAvailable())showLoadError(true)}
+      override fun onUnavailable(){showLoadError(true)}
+    }
+    networkCallback=callback
+    runCatching{manager.registerDefaultNetworkCallback(callback)}
+  }
+  private fun unregisterNetworkMonitoring(){
+    val callback=networkCallback ?: return
+    val manager=getSystemService(CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+    runCatching{manager.unregisterNetworkCallback(callback)}
+    networkCallback=null
+  }
   private fun armLoadTimeout(){ cancelLoadTimeout();loadTimeout=Runnable{showLoadError()};webView.postDelayed(loadTimeout!!,20000) }
   private fun cancelLoadTimeout(){loadTimeout?.let{webView.removeCallbacks(it)};loadTimeout=null}
-  private fun showLoadError(offline:Boolean=isInternetAvailable().not()){runOnUiThread{if(offline){errorTitle.text="NETO is offline";errorMessage.text="NETO is ready to work when your connection returns. Check Wi‑Fi or mobile data, then try again."}else{errorTitle.text="NETO could not connect";errorMessage.text="The service took too long to respond. Check your connection and try again."};errorView.visibility=View.VISIBLE}}
+  private fun showLoadError(offline:Boolean=isInternetAvailable().not()){runOnUiThread{if(offline){errorTitle.text="Oops — NETO is offline";errorMessage.text="NETO is ready to work when your connection returns. Check Wi‑Fi or mobile data, then try again."}else{errorTitle.text="Oops — NETO could not connect";errorMessage.text="The service took too long to respond. Check your connection and try again."};errorView.visibility=View.VISIBLE}}
   private fun openNetworkSettings(){runCatching{startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS))}.onFailure{startActivity(Intent(Settings.ACTION_SETTINGS))}}
   private fun requestMissingRuntimePermissions() { val prefs=getSharedPreferences("neto_permissions",MODE_PRIVATE);val missing=runtimePermissions.filter { !has(it)&&!prefs.getBoolean("requested_$it",false)&&!permanentlyDenied(it) };if(missing.isNotEmpty()){prefs.edit().apply{missing.forEach{putBoolean("requested_$it",true)}}.apply();permissions.launch(missing.toTypedArray())} }
   override fun onInit(status:Int) { ttsReady=status==TextToSpeech.SUCCESS; if(ttsReady) runCatching { tts?.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY).build());tts?.setOnUtteranceProgressListener(object:UtteranceProgressListener(){override fun onStart(id:String)=dispatch("tts",JSONObject().put("state","speaking"));override fun onDone(id:String){audioManager.abandonAudioFocus(focusChange);dispatch("tts",JSONObject().put("state","idle"))};@Deprecated("Deprecated in Java") override fun onError(id:String){audioManager.abandonAudioFocus(focusChange);dispatch("tts",JSONObject().put("state","error").put("message","Android text-to-speech failed."))}}) }.onFailure { ttsReady=false } }
@@ -152,5 +169,5 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
   private fun voiceError(e:Int)=when(e){SpeechRecognizer.ERROR_NETWORK,SpeechRecognizer.ERROR_NETWORK_TIMEOUT->"Speech recognition needs a network connection.";SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS->"Allow microphone access to use voice.";SpeechRecognizer.ERROR_NO_MATCH,SpeechRecognizer.ERROR_SPEECH_TIMEOUT->"I did not hear anything. Tap Talk to try again.";else->"Speech recognition failed. Please try again."}
   private fun trusted(uri:Uri):Boolean{val base=Uri.parse(BuildConfig.NETO_ORIGIN);return uri.scheme==base.scheme&&uri.host==base.host&&uri.port==base.port}
   private fun external(uri:Uri):Boolean { val intent=when(uri.scheme?.lowercase()){"tel"->Intent(if(has(Manifest.permission.CALL_PHONE))Intent.ACTION_CALL else Intent.ACTION_DIAL,uri);"sms","smsto","mmsto","mailto"->Intent(Intent.ACTION_SENDTO,uri);"intent"->runCatching{Intent.parseUri(uri.toString(),Intent.URI_INTENT_SCHEME)}.getOrNull();else->Intent(Intent.ACTION_VIEW,uri).addCategory(Intent.CATEGORY_BROWSABLE)} ?: return true;return try{startActivity(intent);true}catch(_:ActivityNotFoundException){true}catch(_:Exception){true} }
-  override fun onResume(){super.onResume();if(::webView.isInitialized){runCatching { webView.onResume(); dispatch("capabilities",NetoAndroidController(this).capabilities()) } } };override fun onPause(){runCatching { stopVoice();stopSpeaking();if(::webView.isInitialized)webView.onPause() };super.onPause()};override fun onDestroy(){runCatching { cancelLoadTimeout();pendingWebPermissionRequest?.deny();pendingGeoCallback?.invoke(pendingGeoOrigin.orEmpty(),false,false);fileChooser?.onReceiveValue(null);stopVoice();tts?.shutdown();if(::webView.isInitialized)webView.destroy() };window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);super.onDestroy()};@Deprecated("Deprecated in Java") override fun onBackPressed(){if(::webView.isInitialized&&webView.canGoBack())webView.goBack() else super.onBackPressed()}
+  override fun onResume(){super.onResume();if(::webView.isInitialized){runCatching { webView.onResume(); dispatch("capabilities",NetoAndroidController(this).capabilities()) } } };override fun onPause(){runCatching { stopVoice();stopSpeaking();if(::webView.isInitialized)webView.onPause() };super.onPause()};override fun onDestroy(){runCatching { unregisterNetworkMonitoring();cancelLoadTimeout();pendingWebPermissionRequest?.deny();pendingGeoCallback?.invoke(pendingGeoOrigin.orEmpty(),false,false);fileChooser?.onReceiveValue(null);stopVoice();tts?.shutdown();if(::webView.isInitialized)webView.destroy() };window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);super.onDestroy()};@Deprecated("Deprecated in Java") override fun onBackPressed(){if(::webView.isInitialized&&webView.canGoBack())webView.goBack() else super.onBackPressed()}
 }
