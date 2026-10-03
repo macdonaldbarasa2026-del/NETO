@@ -1311,7 +1311,10 @@ export default function App() {
       </div>
 
       <div className="absolute bottom-0 left-0 right-0 z-20 px-3 sm:px-6 pb-[max(12px,env(safe-area-inset-bottom))] pt-2" style={{background:"linear-gradient(to top,var(--bg) 60%,transparent)"}}>
-        <div className={`mx-auto max-w-[560px] flex items-center gap-2 sm:gap-2.5 ${compactMode ? "scale-[0.98]" : ""}`}>
+        <div className="absolute bottom-[72px] sm:bottom-[76px] left-0 right-0 z-10 pointer-events-none text-center px-4 pb-1">
+          <p className="text-[10px] sm:text-[11px] italic font-medium" style={{color:"var(--muted)"}}>© 2026 Created by MacDonald | Powered by Mixfia</p>
+        </div>
+<div className={`mx-auto max-w-[560px] flex items-center gap-2 sm:gap-2.5 ${compactMode ? "scale-[0.98]" : ""}`}>
           <div className="flex-1 h-12 sm:h-[52px] rounded-full shadow-sm border flex items-center pl-1.5 sm:pl-2 pr-2.5 sm:pr-3 gap-2" style={{background:"var(--surface-solid)",borderColor:"var(--border)"}}>
             <button aria-label="Attach image or file" disabled={uploadingFile} onClick={()=>{
               const input=document.createElement("input");
