@@ -143,8 +143,7 @@ jobs:
 
             adb shell pidof com.neto.assistant
 
-            adb shell dumpsys package com.neto.assistant \
-              | grep -q "com.neto.assistant"
+            adb shell dumpsys package com.neto.assistant | grep -q "com.neto.assistant"
 
             adb shell settings put secure enabled_accessibility_services \
               com.neto.assistant/.NetoAccessibilityService
@@ -153,14 +152,11 @@ jobs:
 
             sleep 3
 
-            adb shell dumpsys accessibility \
-              | grep -q "com.neto.assistant"
+            adb shell dumpsys accessibility | grep -q "com.neto.assistant"
 
             adb shell am force-stop com.neto.assistant
 
-            adb shell monkey \
-              -p com.neto.assistant \
-              1
+            adb shell monkey -p com.neto.assistant 1
 
             sleep 5
 
