@@ -137,8 +137,7 @@ jobs:
 
             adb install -r apk/NETO-debug.apk
 
-            adb shell am start \
-              -n com.neto.assistant/.MainActivity
+            adb shell am start -n com.neto.assistant/.MainActivity
 
             sleep 8
 
