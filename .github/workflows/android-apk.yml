@@ -155,26 +155,26 @@ jobs:
 
             adb install -r apk/NETO-debug.apk
 
-            adb shell am start -n com.neto.assistant/.MainActivity
+            adb shell monkey -p com.neto.assistant.cloudflare 1
 
             sleep 8
 
-            adb shell pidof com.neto.assistant
+            adb shell pidof com.neto.assistant.cloudflare
 
-            adb shell dumpsys package com.neto.assistant | grep -q "com.neto.assistant"
+            adb shell dumpsys package com.neto.assistant.cloudflare | grep -q "com.neto.assistant.cloudflare"
 
-            adb shell settings put secure enabled_accessibility_services com.neto.assistant/.NetoAccessibilityService
+            adb shell settings put secure enabled_accessibility_services com.neto.assistant.cloudflare/com.neto.assistant.NetoAccessibilityService
 
             adb shell settings put secure accessibility_enabled 1
 
             sleep 3
 
-            adb shell dumpsys accessibility | grep -q "com.neto.assistant"
+            adb shell dumpsys accessibility | grep -q "com.neto.assistant.cloudflare"
 
-            adb shell am force-stop com.neto.assistant
+            adb shell am force-stop com.neto.assistant.cloudflare
 
-            adb shell monkey -p com.neto.assistant 1
+            adb shell monkey -p com.neto.assistant.cloudflare 1
 
             sleep 5
 
-            adb shell pidof com.neto.assistant
+            adb shell pidof com.neto.assistant.cloudflare

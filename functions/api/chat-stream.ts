@@ -177,7 +177,7 @@ export const onRequestPost: PagesFunction<Env> = async (ctx) => {
     }
     if (!openAiResponse.ok) {
       const status = openAiResponse.status === 429 ? 429 : 502;
-      return Response.json({ error: status === 429 ? "Pro is temporarily unavailable. Please try again later." : "Pro is unavailable right now." }, { status });
+      return Response.json({ error: status === 429 ? "Pro AI has reached its API usage limit. Please check the Cloudflare OpenAI key's usage, billing, and model access." : "Pro is unavailable right now." }, { status });
     }
 
     // Stream the response back
@@ -315,7 +315,6 @@ Client context: ${JSON.stringify(safeClientContext)}`;
     contents,
     systemInstruction: { parts: [{ text: systemInstruction }] },
     tools: geminiTools,
-    generationConfig: { temperature: 1 },
   };
 
   const geminiResponse = await fetch(
@@ -332,7 +331,7 @@ Client context: ${JSON.stringify(safeClientContext)}`;
     const isRateLimit = geminiResponse.status === 429;
     return Response.json(
       { 
-        error: isRateLimit ? "Sorry, you have reached the limit. Please try again later." : "Sorry, my systems are currently overloaded. Please try again in a moment.",
+        error: isRateLimit ? "Normal AI has reached its API usage limit. Please check the Cloudflare Gemini key's usage and billing." : "Sorry, my systems are currently overloaded. Please try again in a moment.",
         details: errorText.slice(0, 500)
       },
       { status: geminiResponse.status }

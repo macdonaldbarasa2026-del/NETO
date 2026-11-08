@@ -11,6 +11,12 @@ android {
         versionName = "1.0"
         buildConfigField("String", "NETO_ORIGIN", "\"https://neto-e6r.pages.dev\"")
     }
+    buildTypes {
+        getByName("debug") {
+            applicationIdSuffix = ".cloudflare"
+            versionNameSuffix = "-cloudflare"
+        }
+    }
     buildFeatures { buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
