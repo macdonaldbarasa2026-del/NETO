@@ -11,11 +11,11 @@
 
 ## 🌐 Live NETO
 
-### 🚀 [OPEN NETO](https://neto-fnp7.onrender.com)
+### 🚀 [OPEN NETO](https://neto-e6r.pages.dev)
 
 Use NETO directly in your browser without downloading anything.
 
-**Live App:** https://neto-fnp7.onrender.com  
+**Live App:** https://neto-e6r.pages.dev  
 **Platform:** Web / PWA  
 **Status:** Online
 

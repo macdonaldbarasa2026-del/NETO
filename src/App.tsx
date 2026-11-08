@@ -1474,7 +1474,7 @@ export default function App() {
           </div></section>}
           <div className="mt-4 grid grid-cols-2 gap-3">
             <button onClick={()=>runNativeAction("open_settings")} className="h-16 rounded-2xl border text-sm font-semibold" style={{background:"var(--surface)",borderColor:"var(--border)"}}>Open settings</button>
-            <button onClick={()=>runNativeAction("open_url", { url: "https://neto-fnp7.onrender.com" })} className="h-16 rounded-2xl border text-sm font-semibold flex items-center justify-center gap-2" style={{background:"var(--surface)",borderColor:"var(--border)"}}>Open NETO site <ExternalLink className="w-4 h-4"/></button>
+            <button onClick={()=>runNativeAction("open_url", { url: "https://neto-e6r.pages.dev" })} className="h-16 rounded-2xl border text-sm font-semibold flex items-center justify-center gap-2" style={{background:"var(--surface)",borderColor:"var(--border)"}}>Open NETO site <ExternalLink className="w-4 h-4"/></button>
             <button onClick={()=>{ const number = window.prompt("Phone number to dial:", ""); if (number) runNativeAction("make_call", { target: number }); }} className="h-16 rounded-2xl border text-sm font-semibold" style={{background:"var(--surface)",borderColor:"var(--border)"}}>Prepare call</button>
             <button onClick={()=>{ const number = window.prompt("Recipient phone number:", ""); const body = number ? window.prompt("Message:", "") : null; if (number && body !== null) runNativeAction("compose_sms", { target: number, text: body }); }} className="h-16 rounded-2xl border text-sm font-semibold" style={{background:"var(--surface)",borderColor:"var(--border)"}}>Prepare SMS</button>
           </div>

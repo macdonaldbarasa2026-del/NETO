@@ -9,7 +9,7 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
-        buildConfigField("String", "NETO_ORIGIN", "\"https://neto-fnp7.onrender.com\"")
+        buildConfigField("String", "NETO_ORIGIN", "\"https://neto-e6r.pages.dev\"")
     }
     buildFeatures { buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
