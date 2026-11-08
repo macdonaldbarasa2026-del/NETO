@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -99,6 +99,24 @@ jobs:
           name: neto-android-apk
           path: android/app/build/outputs/apk/debug/NETO-debug.apk
           if-no-files-found: error
+
+      - name: Update GitHub Release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: NETO Android APK (Latest)
+          body: |
+            ### 🤖 NETO Android APK
+            
+            - **Origin:** https://neto-e6r.pages.dev
+            - **Platform:** Android Debug Build
+            - **Built with:** Cloudflare backend integration
+          draft: false
+          prerelease: false
+          files: android/app/build/outputs/apk/debug/NETO-debug.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   emulator-smoke-test:
     name: Android Emulator Smoke Test
