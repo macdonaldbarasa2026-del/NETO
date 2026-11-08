@@ -16,11 +16,3 @@ compatibility_flags = ["nodejs_compat"]
   binding = "NETO_KV"
   id = "cdb966d50a7440ba8181b2beaf8f2229"
 
-[[durable_objects.bindings]]
-  name = "NETO_LIVE"
-  class_name = "NetoLiveSession"
-  script_name = "neto"
-
-[[migrations]]
-  tag = "v1"
-  new_classes = ["NetoLiveSession"]
