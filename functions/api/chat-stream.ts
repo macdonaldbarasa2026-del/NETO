@@ -238,7 +238,7 @@ export const onRequestPost: PagesFunction<Env> = async (ctx) => {
   // ── NORMAL MODE (Gemini) ─────────────────────────────────────────────────────
   if (!env.GEMINI_API_KEY) return Response.json({ error: "Normal service is not configured." }, { status: 503 });
 
-  const GEMINI_MODEL = env.GEMINI_MODEL || "gemini-2.5-flash";
+  const GEMINI_MODEL = env.GEMINI_MODEL || "gemini-3.8-flash";
   const userText = isToolResult ? toolResultText : message || (safeAttachment?.mimeType?.startsWith("image/") ? "Please analyze the attached image." : "Please analyze the attached file.");
   const userParts: any[] = [{ text: webSearchContext ? `${userText}\n\nWeb search context checked on the live web:\n${webSearchContext}` : userText }];
 
@@ -328,9 +328,13 @@ Client context: ${JSON.stringify(safeClientContext)}`;
   );
 
   if (!geminiResponse.ok) {
+    const errorText = await geminiResponse.text().catch(() => "");
     const isRateLimit = geminiResponse.status === 429;
     return Response.json(
-      { error: isRateLimit ? "Sorry, you have reached the limit. Please try again later." : "Sorry, my systems are currently overloaded. Please try again in a moment." },
+      { 
+        error: isRateLimit ? "Sorry, you have reached the limit. Please try again later." : "Sorry, my systems are currently overloaded. Please try again in a moment.",
+        details: errorText.slice(0, 500)
+      },
       { status: geminiResponse.status }
     );
   }

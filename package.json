@@ -10,8 +10,8 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "build:cf": "vite build && node scripts/inject-sw-precache.mjs && wrangler pages functions build functions --cwd=. --project-directory=. --outdir=tmp-worker && cp tmp-worker/index.js dist/_worker.js && rm -rf tmp-worker",
-    "deploy:cf": "npm run build:cf && wrangler pages deploy dist --cwd=. --project-name=neto --branch=main --commit-dirty=true"
+    "build:cf": "vite build && node scripts/inject-sw-precache.mjs && wrangler pages functions build /data/data/com.termux/files/home/NETO/functions --cwd=/data/data/com.termux/files/home/NETO --project-directory=/data/data/com.termux/files/home/NETO --outdir=/data/data/com.termux/files/home/NETO/tmp-worker && cp tmp-worker/index.js dist/_worker.js && rm -rf tmp-worker",
+    "deploy:cf": "npm run build:cf && wrangler pages deploy /data/data/com.termux/files/home/NETO/dist --cwd=/data/data/com.termux/files/home/NETO --project-name=neto --branch=main --commit-dirty=true"
   },
   "dependencies": {
     "@google/genai": "^2.18.0",

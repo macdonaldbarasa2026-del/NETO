@@ -6,7 +6,7 @@ compatibility_flags = ["nodejs_compat"]
 
 [vars]
   NODE_ENV = "production"
-  GEMINI_MODEL = "gemini-2.5-flash"
+  GEMINI_MODEL = "gemini-3.8-flash"
   GEMINI_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
   OPENAI_PRO_MODEL = "gpt-5.6"
   OPENAI_PRO_REALTIME_MODEL = "gpt-realtime-2.1"
