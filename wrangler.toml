@@ -1,0 +1,26 @@
+# Cloudflare Pages project configuration
+name = "neto"
+pages_build_output_dir = "dist"
+compatibility_date = "2026-11-08"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+  NODE_ENV = "production"
+  GEMINI_MODEL = "gemini-2.5-flash"
+  GEMINI_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
+  OPENAI_PRO_MODEL = "gpt-5.6"
+  OPENAI_PRO_REALTIME_MODEL = "gpt-realtime-2.1"
+  OPENAI_PRO_VOICE = "marin"
+
+[[kv_namespaces]]
+  binding = "NETO_KV"
+  id = "cdb966d50a7440ba8181b2beaf8f2229"
+
+[[durable_objects.bindings]]
+  name = "NETO_LIVE"
+  class_name = "NetoLiveSession"
+  script_name = "neto"
+
+[[migrations]]
+  tag = "v1"
+  new_classes = ["NetoLiveSession"]
